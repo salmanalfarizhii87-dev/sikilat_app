@@ -549,13 +549,28 @@ penyusunnya.
 
 ### Bug yang ditemukan pekerjaan ini
 
-- **`get_attempt_state` gagal setiap kali dipanggil** sejak migrasi `0007` (error `42803`):
-  `order by i` diletakkan di level query, di luar `array_agg`. Tidak pernah terdeteksi karena
-  `db lint` hanya memeriksa fungsi yang berubah di migrasi terakhir. Diperbaiki di `0018`
-  (dan sumbernya di `0007`). Perbaikannya sekaligus mengembalikan jaminan urutan opsi teracak.
+- **`get_attempt_state` sempat saya rusak sendiri.** Riwayatnya: versi `0007` punya bug
+  `42803` (`order by i` di luar `array_agg`), **`0011` sudah memperbaikinya** dengan LATERAL
+  join. Saat menambahkan `passage` di `0017`, saya menyalin badan fungsi dari `0007` — bukan
+  dari `0011` — sehingga `create or replace` **menimpa versi yang sudah benar dengan versi
+  yang bugnya sudah diperbaiki**, dan fungsi itu gagal total selama satu migrasi. `0018`
+  memperbaiki `42803`-nya tetapi tetap memakai konstruksi `0007` (`array_position` + subquery
+  ordinality) yang 0011 sengaja buang karena bisa menghasilkan urutan tak menentu saat
+  `array_position` mengembalikan NULL. `0021` mengembalikan desain `0011` + `passage`.
+  - Pelajarannya: `create or replace function` mengganti **seluruh** badan fungsi. Sebelum
+    mengganti fungsi yang punya riwayat perbaikan, cari versi **terbaru**-nya, bukan yang
+    pertama ditemukan.
+  - Klaim awal saya bahwa bug ini "lolos berbulan-bulan karena `db lint` hanya memeriksa
+    fungsi yang berubah di migrasi terakhir" **salah**: `db lint` memeriksa seluruh skema
+    (tidak ada opsi untuk membatasinya), dan `0011` memang ada sejak Fase 1.
 - **Bucket `question-media` tidak pernah ada di cloud.** `config.toml` hanya mendeklarasikannya
-  untuk lingkungan lokal, sehingga 45 unggahan gambar gagal dengan "Bucket not found" meski soalnya
-  tetap masuk. Dibuat lewat migrasi `0020`.
+  untuk lingkungan lokal — `db push` tidak membuat bucket. Akibatnya 45 unggahan gambar gagal
+  "Bucket not found" sementara soalnya tetap masuk. Dibuat lewat migrasi `0020`.
+  - **Akar masalahnya bukan bucketnya, melainkan skripnya:** kegagalan unggah hanya
+    `console.warn`, soal tetap dibuat tanpa gambar, dan skrip keluar dengan kode `0` — jadi
+    impor tampak berhasil padahal 45 soal tidak bisa dikerjakan. Sekarang skrip memeriksa
+    keberadaan bucket **sebelum** menulis soal pertama (gagal cepat, tanpa data yang perlu
+    dibereskan) dan mencatat setiap gambar yang gagal lalu keluar dengan kode `1`.
 - **Pencocokan gambar lewat `body` saja ambigu**: 41 soal Bahasa Indonesia memakai kalimat pembuka
   yang sama persis. Kunci pencocokan diubah menjadi `body + seluruh teks opsi`.
 
@@ -568,6 +583,11 @@ penyusunnya.
 - 16/16 uji integritas data: 323 `mcq_single`, 85 `mcq_multiple`, 85 `true_false`, 228 ber-`passage`,
   45 bergambar, tidak ada soal tanpa kunci, setiap `media_path` ada di storage, semua `passing_score`
   NULL.
+- 12/12 uji `0021` dengan `shuffle_options = true`: `passage` terkirim utuh, `passage` null untuk
+  soal tanpa teks, urutan opsi **sama dengan `option_orders` yang tersimpan**, urutan **stabil**
+  pada panggilan kedua, kunci tidak bocor, nilai 20/20, `anon` ditolak `42501`.
+- Uji jalur gagal skrip impor: dengan bucket yang tidak ada, skrip berhenti dengan kode `1` dan
+  pesan yang menunjuk migrasi `0020` — jumlah soal di database tidak berubah (505 → 505).
 
 ---
 

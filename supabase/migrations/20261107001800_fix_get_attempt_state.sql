@@ -1,6 +1,10 @@
 -- =============================================================================
 -- 0018 — perbaikan `get_attempt_state`: urutan opsi dan error 42803
 -- =============================================================================
+-- CATATAN: migrasi ini sudah DILEWATI oleh 0021. Isinya tetap disimpan karena
+-- migrasi yang sudah diterapkan tidak boleh diubah. Yang berlaku sekarang
+-- adalah 0021 (desain 0011 + `passage`).
+--
 -- Migrasi 0017 sudah terlanjur diterapkan dengan bug yang sama seperti 0007:
 -- `order by i` diletakkan di level query, di luar `array_agg`. Postgres menolak
 -- seluruh fungsi dengan
@@ -8,15 +12,16 @@
 --   42803: column "e.i" must appear in the GROUP BY clause or be used in an
 --          aggregate function
 --
--- Artinya `get_attempt_state` **gagal setiap kali dipanggil** sejak versi 0007,
--- dan bug ini tidak pernah terlihat karena fungsi peserta tidak pernah masuk
--- `db lint` (yang diperiksa hanya fungsi yang berubah di migrasi terakhir).
+-- Penyebabnya: 0017 menyalin badan fungsi dari **0007**, padahal **0011** sudah
+-- memperbaiki bug ini dengan LATERAL join. `create or replace function`
+-- mengganti seluruh badan fungsi, jadi versi yang sudah benar tertimpa versi
+-- lama.
 --
--- Perbaikannya: `order by e.i` dipindah ke dalam `array_agg`. Selain
--- menghilangkan error, ini juga mengembalikan jaminan yang seharusnya ada —
--- urutan opsi yang sudah diacak saat attempt dimulai terbaca ulang dengan
--- urutan yang sama, sehingga peserta yang me-refresh tidak melihat opsi
--- berpindah tempat.
+-- Perbaikan di sini memindahkan `order by e.i` ke dalam `array_agg`, sehingga
+-- 42803 hilang. Namun konstruksi `array_position` + subquery ordinality tetap
+-- yang 0011 sengaja buang: `array_position` mengembalikan NULL bila id tidak
+-- ditemukan, dan `order by` dengan NULL menempatkan opsi di urutan tak menentu.
+-- 0021 menggantinya dengan LATERAL join dari 0011.
 
 create or replace function public.get_attempt_state(p_token_hash text)
 returns jsonb

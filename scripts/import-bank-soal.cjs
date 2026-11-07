@@ -294,8 +294,40 @@ async function main() {
   const { data: admin, error: adminErr } = await svc.from("admins").select("user_id").limit(1).single();
   if (adminErr || !admin) throw new Error("Tidak ada baris di tabel admins.");
 
+  /* ---- Bucket gambar harus ada SEBELUM satu soal pun ditulis ---- */
+  /*
+   * Bucket `question-media` dideklarasikan di `config.toml`, tetapi berkas itu
+   * hanya berlaku untuk lingkungan LOKAL — `db push` tidak membuat bucket di
+   * cloud. Saat impor pertama, ketiadaannya baru terlihat setelah 493 soal
+   * masuk, sehingga gambar harus diunggah menyusul. Pemeriksaan ini membuat
+   * masalah yang sama gagal cepat, sebelum ada data yang perlu dibereskan.
+   */
+  if (jumlahGambar > 0) {
+    const { data: buckets, error: bucketErr } = await svc.storage.listBuckets();
+    if (bucketErr) throw new Error(`Gagal memeriksa bucket: ${bucketErr.message}`);
+    const ada = (buckets ?? []).some((b) => b.id === "question-media");
+    if (!ada) {
+      throw new Error(
+        "Bucket 'question-media' belum ada di project ini. " +
+          "Jalankan migrasi 20261107002000_storage_bucket_question_media.sql lebih dulu " +
+          "(npx supabase db push --remote). Tanpa bucket, 45 soal akan kehilangan gambarnya.",
+      );
+    }
+  }
+
   /* ---- Jalankan ---- */
   const ringkasan = [];
+  /**
+   * Gambar yang gagal diunggah.
+   *
+   * Sebelumnya kegagalan unggah hanya `console.warn`, soal tetap dibuat tanpa
+   * gambar, dan skrip keluar dengan kode 0 — sehingga impor tampak berhasil
+   * padahal 45 soal kehilangan gambarnya (persis yang terjadi saat bucket
+   * `question-media` belum ada). Soal yang bergambar tanpa gambarnya bukan soal
+   * yang bisa dikerjakan, jadi kegagalan ini harus terlihat: dicatat, diringkas
+   * di akhir, dan membuat exit code non-nol.
+   */
+  const gambarGagal = [];
 
   for (let i = 0; i < paket.length; i += 1) {
     const p = paket[i];
@@ -342,7 +374,7 @@ async function main() {
       if (s.gambar) {
         const full = path.join(args.dir, s.gambar);
         if (!fs.existsSync(full)) {
-          console.warn(`  ! gambar hilang untuk ${s.kode}: ${s.gambar}`);
+          gambarGagal.push(`${s.kode}: berkas tidak ada (${s.gambar})`);
         } else {
           const ext = path.extname(full).toLowerCase();
           const objek = `${exam.id}/${s.kode.toLowerCase()}-${crypto.randomBytes(4).toString("hex")}${ext}`;
@@ -353,7 +385,7 @@ async function main() {
             .upload(objek, isi, { contentType: MIME[ext] ?? "application/octet-stream", upsert: false });
 
           if (upErr) {
-            console.warn(`  ! gagal unggah ${s.kode}: ${upErr.message}`);
+            gambarGagal.push(`${s.kode}: ${upErr.message}`);
           } else {
             mediaPath = objek;
           }
@@ -398,6 +430,21 @@ async function main() {
   console.log(`\nSelesai. ${ringkasan.length} ujian dibuat sebagai DRAFT.`);
   console.log("\nSemua ujian masih draft supaya bisa ditinjau dulu sebelum diaktifkan:");
   for (const r of ringkasan) console.log(`  ${r.kode}  ${r.soal} soal  ${r.durasi} menit  ${r.nama}`);
+
+  /*
+   * Kegagalan gambar dilaporkan di akhir dan membuat exit code non-nol.
+   * Soal yang bergambar tanpa gambarnya tidak bisa dikerjakan, jadi ini bukan
+   * peringatan kosmetik — impor dianggap TIDAK selesai.
+   */
+  if (gambarGagal.length > 0) {
+    console.error(`\n${gambarGagal.length} gambar GAGAL diunggah:`);
+    for (const g of gambarGagal) console.error("  - " + g);
+    console.error(
+      "\nSoal-soal di atas tetap dibuat tetapi tanpa gambar, sehingga belum bisa dikerjakan.\n" +
+        "Perbaiki penyebabnya lalu jalankan: node scripts/upload-bank-gambar.cjs --dir <folder>",
+    );
+    process.exitCode = 1;
+  }
 }
 
 main().catch((err) => {
