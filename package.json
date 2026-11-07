@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "db:types": "supabase gen types typescript --remote > src/types/database.types.ts",
+    "db:types": "node scripts/gen-types.cjs",
     "db:push": "supabase db push --remote",
     "db:push:dry": "supabase db push --remote --dry-run",
     "db:lint": "supabase db lint --remote",

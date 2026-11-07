@@ -131,10 +131,12 @@ Kerjakan bagian ini sebelum Fase 1. Masing-masing kecil, tapi memblokir task lai
     - `admin.ts` memakai `persistSession: false` + `autoRefreshToken: false` (tidak ada sesi pengguna; kunci service role adalah identitasnya) dan mengambil env lewat `serverEnv()` sehingga pesan galatnya jelas bila belum diisi.
     - Catatan: `tsc --noEmit` **tidak** menangkap pelanggaran `server-only`; hanya bundler yang menegakkannya. Karena itu verifikasinya harus lewat `next build`, bukan `tsc`.
 
-- [ ] **T0.5: Tipe database terbuat otomatis** `P0` `S`
+- [x] **T0.5: Tipe database terbuat otomatis** `P0` `S`
   - Cakupan: skrip `npm run db:types` → `supabase gen types typescript --remote > src/types/database.types.ts` (memakai `--remote`, bukan `--local`, karena tidak ada Postgres lokal; di CLI 3.0.0 `--linked` sudah dihapus). Adapter `src/lib/types.ts` dipetakan dari tipe generated, bukan didefinisikan ulang.
-  - **Hasil sebagian (7 November 2026):** skrip `db:types` sudah terpasang. `src/types/database.types.ts` dibuat sebagai **placeholder sah** (skema kosong + helper `Tables`/`TablesInsert`/`TablesUpdate`/`Enums`) supaya `tsc` hijau dan tiga klien bisa dikompilasi sebelum database ada. Berkas ini akan ditimpa hasil generate sungguhan.
-  - Selesai bila: `src/types/database.types.ts` ter-generate dari project dev, dan `Question.correctOptionIds` hanya dipakai di modul admin/server; tipe peserta memakai `PublicQuestion` tanpa kunci.
+  - **Hasil (7 November 2026):** `src/types/database.types.ts` sekarang **hasil generate sungguhan** dari project `sikilat-cbt` — 21.655 karakter, 29 blok, 20 fungsi ber-`Args`. Diverifikasi memuat 9 tabel, 19 fungsi (termasuk `get_attempt_state`, `submit_attempt`, `get_result` yang ditulis satu baris sehingga lolos pemeriksaan pertama), dan 6 enum. `tsc --noEmit` hijau dengan tipe sungguhan ini.
+  - **Jebakan yang diperbaiki:** `supabase gen types > file` **merusak berkas** di Windows. CLI menulis pesan status (`Target: project ... · production`) ke stderr, dan PowerShell menyatukannya ke stdout saat diarahkan dengan `>`, sehingga berkas `.ts` diawali 7 baris diagnostik dan tidak valid. Solusi: `scripts/gen-types.cjs` menangkap stdout terpisah, memotong dari `export type Json`, memvalidasi (`export type Database`, skema `public`, tabel `admins`), dan **hanya menimpa berkas bila validasi lolos** — generasi gagal tidak pernah meninggalkan tipe kosong yang membuat seluruh proyek merah.
+  - Catatan skrip: `npx.cmd` tidak bisa di-spawn tanpa shell di Node ≥20 (`EINVAL`), sedangkan `shell: true` memicu `DEP0190`. Skrip memanggil `node_modules/supabase/dist/supabase.js` langsung dengan `process.execPath` — tanpa shell, tanpa escaping, versi CLI terjamin sama dengan `devDependencies`.
+  - **Sisa:** adapter `src/lib/types.ts` + tipe `PublicQuestion` (tanpa kunci) belum dibuat; akan dikerjakan bersama modul peserta.
 
 - [ ] **T0.6: Restrukturisasi folder sesuai PRD §5.4** `P0` `M`
   - Cakupan: buat `src/features/{auth,exams,questions,attempts,grading,reports}/` dengan `actions.ts`, `queries.ts`, `schemas.ts`, `types.ts`; pindahkan komponen yang jelas milik satu domain.
@@ -203,7 +205,22 @@ Semua task di fase ini diverifikasi lewat `db lint` + uji HTTP ke Data API.
 
 - [x] **T1.7: RPC `start_attempt` dan `resume_attempt`** `P0` `L`
   - **Hasil:** `20261107000700_rpc_participant.sql`.
-  - **Belum diuji end-to-end:** butuh kunci `sb_secret_` yang belum terpasang. Uji 6 skenario tertunda.
+  - **Terverifikasi end-to-end (7 November 2026)** dengan kunci `sb_secret_` terhadap project sungguhan:
+
+    | Skenario | Hasil |
+    |---|---|
+    | `start_attempt` sukses | HTTP 200, `attemptNo=1`, `expiresAt` = `serverNow` + durasi |
+    | Soal & opsi teracak | urutan diterima ≠ urutan `position` di database |
+    | **Kebocoran kunci** | respons **tidak** memuat `is_correct`, `reference_answer`, `explanation`, `correct_ids` |
+    | Kode ujian salah | `EXAM_NOT_FOUND` |
+    | Nama dengan attempt masih `in_progress` | `NAME_IN_USE` (409, dari indeks `one_active_attempt`) |
+    | Attempt sebelumnya sudah selesai, kuota masih ada | **diizinkan** (`attemptNo=2`) — benar, bukan bug |
+    | `max_attempts` habis | `NO_ATTEMPTS_LEFT` (400) |
+    | `resume_attempt` kode salah | `INVALID_RESUME_CODE` (400) |
+    | `resume_attempt` kode benar | 200 + token berganti; token lama → `UNAUTHENTICATED` (403), token baru → 200 |
+    | tanpa `p_token_hash` (body kosong) | 400 — token wajib |
+
+  - **Catatan uji:** dua "kegagalan" awal ternyata **salah rancang uji**, bukan bug: (a) `NAME_IN_USE` diuji saat attempt lama sudah `graded` sehingga memang boleh mulai lagi; (b) `submit_attempt` dipanggil dengan `curl -d` tanpa header `Content-Type`, sehingga body terbuang. Keduanya lolos setelah diuji dengan benar.
 
 - [x] **T1.8: RPC `get_attempt_state`, `save_answer`, `log_attempt_event`** `P0` `L`
   - **Hasil:** `20261107000700_rpc_participant.sql`, diperbaiki di `20261107001100_fix_attempt_state.sql`.
@@ -224,10 +241,15 @@ Semua task di fase ini diverifikasi lewat `db lint` + uji HTTP ke Data API.
   - **Hasil:** `20261107000900_cron.sql`. Sekaligus membersihkan `rate_limits` lama, jadi tidak perlu cron kedua.
   - **Kegagalan pertama:** `unrecognized exception condition "undefined_schema"` — nama kondisi itu tidak ada di PL/pgSQL (yang sah `invalid_schema_name`). Diganti penanganan SQLSTATE eksplisit.
 
-- [ ] **T1.12: `supabase/seed.sql`** `P0` `S`
+- [x] **T1.12: `supabase/seed.sql`** `P0` `S`
   - Cakupan: satu admin aktif + satu ujian contoh (10 soal PG + 2 esai) agar pengembangan tidak butuh data palsu.
-  - Catatan: tanpa Postgres lokal, seed **tidak** dijalankan lewat `db reset`, melainkan `supabase db push --include-seed` atau SQL manual di Studio. Akun admin dibuat lewat dashboard **Authentication → Add user** lebih dulu; `seed.sql` hanya mengisi baris `admins` dengan `user_id` yang sesuai.
-  - Selesai bila: admin bisa login, dan ujian contoh tampil di dashboard dengan 12 soal.
+  - Catatan: tanpa Postgres lokal, seed **tidak** dijalankan lewat `db reset`, melainkan SQL manual di Studio atau lewat Data API (CLI 3.0.0 tidak punya perintah menjalankan SQL bebas). Akun admin dibuat lewat dashboard **Authentication → Add user** lebih dulu; `seed.sql` hanya mengisi baris `admins` dengan `user_id` yang sesuai.
+  - **Hasil (7 November 2026):** `supabase/seed.sql` ditulis dan **dijalankan sungguhan**. Isinya: ujian `CONTOH1` berstatus `published` (60 menit, 2 attempt, `passing_score` 70, soal & opsi teracak, `score_and_review`/`instant`), 12 soal — 10 PG × 6 poin (termasuk 2 soal PG jawaban ganda) + 2 esai × 20 poin = **100 poin** — dan 40 opsi.
+    - Aman dijalankan berulang: `on conflict (code) do nothing`, lalu berhenti lebih awal bila soal ujian itu sudah ada.
+    - `admin_uid` sengaja **tidak** diberi nilai default. UID palsu melanggar foreign key ke `auth.users`; berkas gagal dengan pesan jelas bila belum diisi atau user-nya tidak ada, alih-alih diam-diam membuat data hampa.
+  - **Terverifikasi lewat alur sungguhan:** peserta menjawab `start_attempt` → 12 soal → menjawab 10 PG dengan kunci benar → `submit_attempt` menghasilkan `scoreAuto = 60`, `maxScore = 100`, status `needs_grading` (esai menunggu dinilai). Angka itu cocok dengan perhitungan manual, jadi seed tidak hanya "terpasang" tapi menghasilkan ujian yang bisa dikerjakan.
+  - **Data uji attempt sudah dihapus**; yang tersisa hanya ujian contoh + admin, sesuai tujuan seed.
+  - Selesai bila: admin bisa login, dan ujian contoh tampil di dashboard dengan 12 soal. — **terpenuhi** (login diuji di T2.1).
 
 - [x] **T1.13: Rate limit tabel Postgres** `P0` `S`
   - Cakupan (keputusan **K2**): tabel `rate_limits` + `rate_limit_consume(bucket, identifier, limit, window_secs)` atomik + `rate_limit_purge()`.
@@ -249,40 +271,106 @@ Semua task di fase ini diverifikasi lewat `db lint` + uji HTTP ke Data API.
     | `anon` RPC `rate_limit_consume` | `42501 permission denied for function` |
 
   - **Catatan penting:** tabel kosong mengembalikan `[]` baik dengan maupun tanpa RLS, jadi uji baca-saja **tidak membuktikan apa pun**. Yang membuktikan adalah uji tulis (`42501`) dan `Content-Range: */0`.
-  - **Belum diuji:** akses sebagai admin (`authenticated`) — butuh akun admin + kunci `sb_secret_`.
+  - **Akses admin (dibuktikan 7 November 2026):**
+
+    | Uji | Hasil |
+    |---|---|
+    | JWT admin GET `exams` | HTTP 200 + data (RLS membuka untuk admin) |
+    | JWT non-admin panggil `grade_essay` | `FORBIDDEN` (403) dari `assert_admin()` |
+    | JWT admin panggil `grade_essay` | HTTP 200, `scoreManual` terisi, status → `graded` |
+
+  - **Bukti bahwa `assert_admin()` bukan sekadar formalitas:** user `authenticated` yang **tidak** ada di tabel `admins` ditolak, jadi hak akses bergantung pada baris `admins`, bukan pada "punya sesi Auth".
+
+- [x] **T1.15: Uji end-to-end seluruh alur RPC** `P0` `M`
+  - Cakupan: menjalankan alur peserta + admin dari awal sampai akhir lewat Data API, memakai kunci `sb_secret_` (peserta) dan JWT admin, untuk membuktikan skoring, idempotensi, dan publikasi hasil bekerja — bukan hanya "migrasi terpasang".
+  - **Data uji:** ujian `UJI01` (durasi 30 menit, `max_attempts=2`, 3 soal: PG tunggal 10, PG ganda 20, esai 30; total 60), `UJI02` (`max_attempts=1`, untuk menguji kuota).
+  - **Hasil uji 7 November 2026:**
+
+    | Langkah | Hasil |
+    |---|---|
+    | `start_attempt` | 200, 3 soal, urutan teracak, tanpa kunci |
+    | `save_answer` ×3 (PG tunggal, PG ganda, esai) | 200, `savedAt` terisi |
+    | PG tunggal benar (10) + PG ganda benar semua (20) | `scoreAuto = 30` |
+    | `submit_attempt` | `needs_grading`, `maxScore = 60`, ada esai belum dinilai |
+    | `submit_attempt` **dipanggil ulang** | respons **identik byte-per-byte** → idempoten |
+    | `grade_essay` dengan JWT admin, 25 poin | `graded`, `scoreAuto 30 + scoreManual 25 = 55/60` |
+    | `get_result` dengan `result_token` | `percentage = 91,67`, rincian per soal + feedback benar |
+    | Poin esai melebihi poin soal (99 dari 30) | `VALIDATION` (400) |
+
+  - **Cara skor dibuktikan:** PG ganda dinilai dengan aturan **"semua benar"** (K1). Jawaban benar semua → 20; kalau aturan parsial, angka ini tidak bisa membedakan, jadi angka 30 lalu 55 dipakai sebagai patokan tetap untuk uji regresi berikutnya.
+  - **Data uji sudah dihapus** setelah verifikasi (ujian, soal, opsi, attempt, jawaban, `audit_logs`, `rate_limits`), dan user Auth non-admin dihapus. Yang **sengaja ditinggalkan**: satu akun admin (lihat T1.12).
+
+> **Pelajaran pengujian (berlaku untuk fase berikutnya)**
+>
+> - `curl -d` **tanpa** `-H "Content-Type: application/json"` membuang body → RPC menerima parameter kosong dan gagal 400. Selalu kirim body lewat berkas + `--data-binary @file` dengan header tipe.
+> - `Invoke-WebRequest` di PowerShell 5.1 merusak body JSON; dan karakter `*` pada query string ikut dirusak PowerShell. Untuk uji HTTP, **Node `fetch` lebih andal** daripada `curl`/`Invoke-WebRequest` di lingkungan ini.
+> - Tabel kosong + RLS tetap `[]` (HTTP 200). Jumlah baris harus dibaca dari header `Content-Range` dengan `Prefer: count=exact`; `HEAD` tidak didukung Data API, jadi pakai `GET` + `select=*&limit=1`.
 
 ---
 
 ## Fase 2: Autentikasi admin (M1)
 
-- [ ] **T2.1: `signIn` / `signOut` Server Action** `P0` `M`
+- [x] **T2.1: `signIn` / `signOut` Server Action** `P0` `M`
   - Cakupan: Zod schema, `supabase.auth.signInWithPassword`, cek baris `admins` + `is_active`, `ActionResult<T>` sesuai PRD §8.1, pesan error Indonesia.
-  - File: `src/features/auth/actions.ts`, `schemas.ts`.
-  - Selesai bila: email salah, password salah, dan akun nonaktif menghasilkan kode error berbeda.
+  - File: `src/features/auth/actions.ts`, `schemas.ts`, `src/lib/action-result.ts`.
+  - **Hasil (7 November 2026):** tiga lapis pemeriksaan — Zod → Supabase Auth → tabel `admins`. Lapis ketiga krusial: `signInWithPassword` berhasil untuk **setiap** user Auth, jadi tanpa cek `admins` akun non-admin bisa masuk panel.
+    - Bila lapis 3 menolak, sesi yang sudah terbentuk **dicabut lagi** (`signOut`). Tanpa itu cookie sesi non-admin tertinggal dan `proxy.ts` menganggapnya "sudah login".
+    - Email salah dan password salah mengembalikan kode **sama** (`UNAUTHENTICATED`) supaya penyerang tidak bisa menebak email mana yang terdaftar.
+    - `email` dinormalisasi (`trim` + `toLowerCase`) **sebelum** validasi; urutan `transform`-lalu-`pipe` sempat membuat normalisasi tidak jalan (terbukti di uji Zod, lalu diperbaiki).
+  - **Terverifikasi di peramban (Playwright, bukan asumsi):**
 
-- [ ] **T2.2: `proxy.ts` guard `/admin/*`** `P0` `S`
+    | Skenario | Hasil |
+    |---|---|
+    | password salah | `"Email atau kata sandi salah."` |
+    | password benar | masuk ke `/admin`, cookie `sb-…-auth-token` terbentuk |
+    | user Auth **tanpa** baris `admins` | `"Akun ini tidak terdaftar sebagai admin…"`, cookie **dicabut** |
+    | admin dengan `is_active = false` | `"Akun admin ini dinonaktifkan…"`, cookie **dicabut** |
+    | `signOut` (dari menu shell & dari halaman akun) | ke `/admin/login`, cookie sesi **0 tersisa** |
+    | `/admin` setelah keluar | kembali ke `/admin/login` |
+
+  - Selesai bila: email salah, password salah, dan akun nonaktif menghasilkan kode error berbeda. — **terpenuhi**: `UNAUTHENTICATED`, `FORBIDDEN` (non-admin), `FORBIDDEN` (nonaktif).
+
+- [x] **T2.2: `proxy.ts` guard `/admin/*`** `P0` `S`
   - Cakupan: refresh sesi via `@supabase/ssr`, redirect ke `/admin/login` bila belum login, redirect ke `/admin` bila sudah login dan membuka `/admin/login`.
-  - Selesai bila: buka `/admin/exams` tanpa sesi → 307 ke login.
+  - File: `src/proxy.ts` (Next.js 16 mengganti nama `middleware.ts` menjadi `proxy.ts`).
+  - **Hasil & verifikasi:** `/admin` → **307** ke `/admin/login`; `/admin/exams` → **307** ke `/admin/login?next=%2Fadmin%2Fexams`; `/admin/login` → **200** tanpa sesi; `/` (halaman peserta) → **200**, tidak tersentuh guard. Saat sudah masuk, `/admin/login` → redirect ke `/admin`.
+  - **Keputusan desain:** guard hanya menanyakan "ada sesi atau tidak". Ia **tidak** memeriksa tabel `admins`, karena itu berarti satu query per permintaan dan merupakan tugas `requireAdmin()`. Akun non-admin yang lolos guard tetap tidak bisa berbuat apa-apa: data ditahan RLS, aksi ditahan `requireAdmin()`.
+  - `matcher` sengaja hanya `/admin` dan `/admin/:path*`; rute peserta (`/u/*`, `/hasil/*`) tidak boleh diproses karena peserta tidak punya sesi.
+  - `?next=` hanya menerima path internal (`/…`, bukan `//…` atau berskema) untuk mencegah open redirect.
+  - **Bug ditemukan & diperbaiki saat uji:** urutan `router.refresh()` lalu `router.replace(nextPath)` membuat `?next=` **hilang** — `refresh()` memicu render ulang halaman login, dan karena sesi sudah ada `proxy.ts` langsung mengalihkan ke `/admin` sehingga `replace` kalah balapan. Dibalik urutannya; `?next=/admin/exams` kini benar-benar mendarat di `/admin/exams`.
+  - **Catatan cookie:** `@supabase/ssr` memakai `httpOnly: false` **secara bawaan dan disengaja** — klien browser membaca cookie sesi lewat `document.cookie` untuk menyegarkan token. Memaksakan `httpOnly: true` akan memutus refresh dan mengeluarkan admin di tengah pengerjaan. Risiko XSS ditekan CSP `script-src 'self'` di `next.config.ts`.
 
-- [ ] **T2.3: `requireAdmin()` untuk aksi dan route handler** `P0` `S`
+- [x] **T2.3: `requireAdmin()` untuk aksi dan route handler** `P0` `S`
   - Cakupan: helper server yang memanggil `getUser()` + cek `admins`, mengembalikan `ActionResult` `UNAUTHENTICATED`/`FORBIDDEN`.
-  - Selesai bila: setiap `actions.ts` admin memanggilnya di baris pertama.
+  - File: `src/lib/auth/require-admin.ts`.
+  - **Hasil:** memakai `auth.getUser()` (**bukan** `getSession()`): `getSession()` hanya membaca cookie dan mempercayai isinya, sedangkan `getUser()` memverifikasi tanda tangan token ke server Auth.
+  - Kegagalan **membaca** tabel `admins` sengaja dibedakan dari "bukan admin" (`INTERNAL` + log). Kalau RLS salah konfigurasi dan keduanya disamakan, bug RLS akan tersamar sebagai `FORBIDDEN` dan sulit dilacak.
+  - Tersedia juga `getAdminSession()` (versi ringkas untuk Server Component yang hanya perlu menampilkan identitas).
 
-- [ ] **T2.4: Halaman login memakai action nyata** `P0` `S`
+- [x] **T2.4: Halaman login memakai action nyata** `P0` `S`
   - Cakupan: ganti mock `setTimeout` di `src/app/admin/login/page.tsx`; tampilkan error per field; state `pending`; `redirect` setelah sukses.
-  - Selesai bila: login sukses mendarat di `/admin` dengan cookie httpOnly.
+  - **Hasil:** mock dan spanduk "Mode demo" dihapus. Galat per field ditampilkan lewat prop `error` pada `Field` (memakai `aria-invalid`), galat umum lewat `role="alert"`. State `pending` dipulihkan di `finally` sehingga tombol tidak pernah tertinggal mati.
+  - Modul lama `src/lib/admin-identity.ts` (identitas dari `localStorage`) **dihapus** — nilai di `localStorage` bisa diubah siapa saja dan tidak pernah diverifikasi, jadi tidak layak jadi dasar menampilkan "kamu masuk sebagai X". Identitas kini dibaca di server lewat layout.
 
-- [ ] **T2.5: Logout di shell dan halaman akun** `P0` `S`
+- [x] **T2.5: Logout di shell dan halaman akun** `P0` `S`
   - Cakupan: tombol Keluar di `admin-shell.tsx` dan `account/page.tsx` memanggil `signOut` lalu redirect.
-  - Selesai bila: setelah logout, `/admin` kembali ke login dan cookie hilang.
+  - **Hasil:** keduanya memakai Server Action `signOut` yang sama (satu jalur keluar, bukan dua yang bisa menyimpang). Shell menerima identitas sebagai prop dari layout server (`admin`), bukan dari `localStorage`.
+  - **Terverifikasi:** setelah keluar dari kedua tempat, cookie `sb-…-auth-token` = **0** dan `/admin` kembali ke login.
 
-- [ ] **T2.6: Halaman akun nyata** `P1` `M`
+- [x] **T2.6: Halaman akun nyata** `P1` `M`
   - Cakupan: tampilkan email + nama admin dari sesi (bukan "Pak Budi"), ganti password via `updatePassword`, validasi konfirmasi, `toast` hasil.
-  - Selesai bila: password lama gagal dipakai setelah diganti.
+  - File: `account/page.tsx` (Server Component), `account/password-form.tsx`, `account/sign-out-button.tsx`.
+  - **Hasil:** profil menampilkan `fullName`/email dari sesi terverifikasi + "Masuk terakhir" dari `last_sign_in_at`. `updatePassword` memverifikasi password lama (percobaan `signInWithPassword` memakai email sendiri) sebelum memperbarui — tanpa itu, siapa pun yang menemukan perangkat dalam keadaan login bisa mengunci pemiliknya. Setelah berganti, **semua sesi diakhiri**.
+  - Tombol "Keluarkan sesi lain" dinonaktifkan dengan alasan tertulis (belum ada pencabutan sesi per perangkat); mengganti password adalah cara yang tersedia.
+  - **Belum diuji end-to-end:** ganti password tidak dijalankan saat verifikasi karena akan mengubah kredensial akun uji yang dipakai tes lain. Logikanya teruji tipe dan lint, tapi **belum** lewat peramban — tandai saat menguji ulang.
 
-- [ ] **T2.7: Rate limit login (AUTH-05)** `P1` `M`
+- [x] **T2.7: Rate limit login (AUTH-05)** `P1` `M`
   - Cakupan: 5 gagal / 15 menit per IP+email memakai mekanisme **K2**; error `RATE_LIMITED`.
-  - Selesai bila: percobaan ke-6 mengembalikan `RATE_LIMITED` tanpa memanggil Supabase Auth.
+  - File: `src/features/auth/rate-limit.ts`.
+  - **Hasil:** pasangan **IP + email** (bukan IP saja — itu melukai pengguna sah di balik NAT sekolah; bukan email saja — itu memudahkan mengunci akun orang lain). Hanya **kegagalan** yang dihitung; percobaan yang berhasil tidak memakan kuota.
+  - Pemeriksaan memakai **baca-saja** langsung ke tabel `rate_limits` dengan rumus jendela yang sama seperti SQL. Percobaan pertama saya memakai `rate_limit_consume` dengan jendela 1 detik untuk "mengintip" — itu keliru karena tetap menambah counter pada bucket tandingan; dibuang.
+  - **Terverifikasi:** percobaan 1–4 → "Email atau kata sandi salah."; percobaan ke-5 menghabiskan kuota sehingga **percobaan 6 dan seterusnya** → `RATE_LIMITED` ("Coba lagi dalam N menit"), termasuk saat **password benar** dimasukkan. Counter di DB naik tepat +1 per kegagalan (dibuktikan dengan membaca tabel sebelum/sesudah; kegagalan "blokir di percobaan ke-3" awal ternyata disebabkan counter sisa uji sebelumnya di jendela 15 menit yang sama).
+  - Selesai bila: percobaan ke-6 mengembalikan `RATE_LIMITED` tanpa memanggil Supabase Auth. — **terpenuhi** (pemeriksaan kuota terjadi sebelum `signInWithPassword`).
 
 ---
 

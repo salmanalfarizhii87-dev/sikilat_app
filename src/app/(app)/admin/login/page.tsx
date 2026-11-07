@@ -3,10 +3,10 @@
 import * as React from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { AlertCircle, ArrowLeft, Eye, EyeOff, Loader2 } from "lucide-react";
 import { Field, Input } from "@/components/ui/field";
-import { saveAdminIdentity } from "@/lib/admin-identity";
+import { signIn } from "@/features/auth/actions";
 import {
   DoodleDefs,
   Doodles2xl,
@@ -41,38 +41,68 @@ function BrandMark({ size }: { size: "sm" | "lg" }) {
 
 export default function AdminLoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [show, setShow] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = React.useState<Record<string, string[]>>({});
   const [pending, setPending] = React.useState(false);
 
   /*
-   * Mode demo: belum ada Supabase Auth, jadi tidak ada kredensial yang bisa
-   * diverifikasi. Halaman ini menerima input yang bentuknya wajar lalu menyimpan
-   * email yang diketik, supaya shell admin menampilkan identitas nyata, bukan
-   * nama contoh. Halaman ini menyatakan status itu terang-terangan di bawah form.
+   * Tujuan setelah masuk. `proxy.ts` menaruh path yang tadi dicoba di `?next=`,
+   * mis. `/admin/exams`. Hanya path internal yang diterima: alamat berawalan `//`
+   * atau berisi skema (`http:`) akan membuka redirect ke domain lain, jadi
+   * diperlakukan sebagai tidak ada tujuan.
    */
-  const submit = (e: React.FormEvent) => {
+  const nextPath = React.useMemo(() => {
+    const raw = searchParams.get("next");
+    if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return "/admin";
+    return raw;
+  }, [searchParams]);
+
+  /*
+   * Server Action, bukan `fetch` manual: cookie sesi diatur di server sehingga
+   * tidak pernah bisa disentuh JavaScript di peramban, dan halaman ini tidak
+   * perlu tahu apa pun soal token.
+   */
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.includes("@")) {
-      setError("Masukkan email yang valid, mis. nama@sekolah.sch.id.");
-      return;
-    }
-    if (password.length < 6) {
-      setError("Password minimal 6 karakter.");
-      return;
-    }
+
+    if (pending) return;
+
     setError(null);
+    setFieldErrors({});
     setPending(true);
-    saveAdminIdentity(email.trim());
-    router.push("/admin");
-    /*
-     * Tombol dikembalikan ke keadaan semula setelah navigasi dimulai. Tanpa ini
-     * tombol tetap `disabled` dengan spinner berputar, sehingga pengguna
-     * terjebak kalau navigasi gagal dan tidak ada cara mencoba lagi.
-     */
-    window.setTimeout(() => setPending(false), 1500);
+
+    try {
+      const result = await signIn({ email, password });
+
+      if (!result.ok) {
+        setError(result.error.message);
+        if (result.error.fields) setFieldErrors(result.error.fields);
+        return;
+      }
+
+      /*
+       * `replace` dulu, `refresh` setelahnya.
+       *
+       * Urutan sebaliknya (`refresh` lalu `replace`) terbukti menggagalkan `next`:
+       * `refresh()` memicu render ulang rute saat ini, dan karena sesi sudah ada,
+       * `proxy.ts` langsung mengalihkan halaman login ke `/admin` — permintaan
+       * `replace(nextPath)` kemudian kalah balapan dan tujuan aslinya hilang.
+       *
+       * `refresh` tetap dipanggil supaya Server Component pada tujuan membaca sesi
+       * yang baru, bukan muatan cache dari saat belum masuk.
+       */
+      router.replace(nextPath);
+      router.refresh();
+    } catch {
+      // Hanya terjadi bila lingkungan server bermasalah (mis. env belum diisi).
+      setError("Tidak bisa menghubungi server. Periksa koneksi lalu coba lagi.");
+    } finally {
+      setPending(false);
+    }
   };
 
   return (
@@ -167,7 +197,7 @@ export default function AdminLoginPage() {
           </p>
 
           <form onSubmit={submit} className="mt-8 space-y-4">
-            <Field label="Email" htmlFor="email" required>
+            <Field label="Email" htmlFor="email" required error={fieldErrors.email?.[0]}>
               <Input
                 id="email"
                 type="email"
@@ -175,6 +205,7 @@ export default function AdminLoginPage() {
                 onChange={(e) => {
                   setEmail(e.target.value);
                   setError(null);
+                  setFieldErrors({});
                 }}
                 placeholder="nama@sekolah.sch.id"
                 autoComplete="email"
@@ -186,7 +217,12 @@ export default function AdminLoginPage() {
               />
             </Field>
 
-            <Field label="Kata sandi" htmlFor="password" required>
+            <Field
+              label="Kata sandi"
+              htmlFor="password"
+              required
+              error={fieldErrors.password?.[0]}
+            >
               <div className="relative">
                 <Input
                   id="password"
@@ -195,6 +231,7 @@ export default function AdminLoginPage() {
                   onChange={(e) => {
                     setPassword(e.target.value);
                     setError(null);
+                    setFieldErrors({});
                   }}
                   placeholder="••••••••"
                   autoComplete="current-password"
@@ -247,9 +284,9 @@ export default function AdminLoginPage() {
 
           <div id="bantuan-password" className="mt-4 rounded-[12px] border border-line bg-surface px-3.5 py-3">
             <p className="text-[12px] leading-relaxed text-muted">
-              <strong className="font-semibold text-ink">Mode demo.</strong> Belum ada server
-              autentikasi, jadi email dan password apa pun yang bentuknya wajar akan diterima. Jangan
-              masukkan password asli.
+              <strong className="font-semibold text-ink">Tidak ada pendaftaran publik.</strong> Akun
+              admin dibuatkan oleh pengelola sekolah. Bila kamu lupa kata sandi, minta pengelola
+              untuk meresetnya.
             </p>
           </div>
 

@@ -16,7 +16,7 @@ import {
 import { Logo } from "@/components/ui/primitives";
 import { cn, initials } from "@/lib/utils";
 import { demoExam } from "@/lib/mock-data";
-import { clearAdminIdentity, useAdminIdentity } from "@/lib/admin-identity";
+import { signOut } from "@/features/auth/actions";
 import { useFocusTrap } from "@/components/ui/use-focus-trap";
 
 const nav = [
@@ -50,14 +50,33 @@ function buildCrumbs(pathname: string) {
   });
 }
 
-export function AdminShell({ children }: { children: React.ReactNode }) {
+/**
+ * Identitas admin yang ditampilkan di menu. Dikirim dari Server Component lewat
+ * layout, bukan dibaca dari `localStorage`: nilai di `localStorage` bisa diubah
+ * siapa pun dan tidak pernah diverifikasi, jadi tidak layak jadi dasar tampilan
+ * "kamu masuk sebagai X".
+ */
+export interface ShellAdmin {
+  email: string;
+  fullName: string | null;
+}
+
+export function AdminShell({
+  children,
+  admin,
+}: {
+  children: React.ReactNode;
+  admin: ShellAdmin | null;
+}) {
   const pathname = usePathname();
   const router = useRouter();
   const crumbs = buildCrumbs(pathname);
   const [mobileOpen, setMobileOpen] = React.useState(false);
   const [menuOpen, setMenuOpen] = React.useState(false);
-  const identity = useAdminIdentity();
+  const [signingOut, setSigningOut] = React.useState(false);
   const drawerRef = React.useRef<HTMLElement>(null);
+
+  const adminDisplayName = admin ? (admin.fullName ?? admin.email.split("@")[0]) : "?";
 
   useFocusTrap(mobileOpen, drawerRef, () => setMobileOpen(false));
 
@@ -66,10 +85,26 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
     setMenuOpen(false);
   };
 
-  const signOut = () => {
-    clearAdminIdentity();
-    closeMenus();
-    router.push("/admin/login");
+  /*
+   * Keluar lewat Server Action: hanya server yang bisa menghapus cookie sesi
+   * httpOnly. Bila gagal, menu tetap terbuka dan tombolnya bisa dipakai lagi —
+   * tanpa itu, pengguna melihat layar "keluar" tapi sesinya masih hidup.
+   */
+  const handleSignOut = async () => {
+    if (signingOut) return;
+    setSigningOut(true);
+    try {
+      const result = await signOut();
+      if (!result.ok) {
+        setSigningOut(false);
+        return;
+      }
+      closeMenus();
+      router.replace("/admin/login");
+      router.refresh();
+    } catch {
+      setSigningOut(false);
+    }
   };
 
   // Hanya satu item yang boleh aktif. `/admin/exams/new` adalah anak dari
@@ -191,11 +226,11 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
                 className="press flex h-11 items-center gap-2 rounded-field border border-line pl-1 pr-2.5 hover:bg-line-soft"
               >
                 <span className="grid size-8 place-items-center rounded-[6px] bg-navy-900 font-heading text-[11.5px] font-bold text-white">
-                  {identity ? initials(identity.email.split("@")[0]) : "?"}
+                  {admin ? initials(adminDisplayName) : "?"}
                 </span>
                 <span className="hidden max-w-[150px] text-left sm:block">
                   <span className="block truncate font-heading text-[12px] font-bold leading-tight text-ink">
-                    {identity ? identity.email.split("@")[0] : "Belum masuk"}
+                    {admin ? adminDisplayName : "Belum masuk"}
                   </span>
                   <span className="block text-[11px] leading-tight text-muted">Admin</span>
                 </span>
@@ -209,10 +244,10 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
                 >
                   <div className="border-b border-line px-3 py-2.5">
                     <p className="truncate font-heading text-[12.5px] font-bold text-ink">
-                      {identity ? identity.email.split("@")[0] : "Belum masuk"}
+                      {admin ? (admin.fullName ?? admin.email.split("@")[0]) : "Belum masuk"}
                     </p>
                     <p className="truncate text-[11.5px] text-muted">
-                      {identity ? identity.email : "Tidak ada email tersimpan"}
+                      {admin ? admin.email : "Sesi tidak ditemukan"}
                     </p>
                   </div>
                   <Link
@@ -225,11 +260,13 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
                   </Link>
                   <button
                     type="button"
-                    onClick={signOut}
+                    onClick={handleSignOut}
+                    disabled={signingOut}
                     role="menuitem"
-                    className="flex min-h-11 w-full items-center gap-2 px-3 py-2.5 text-left text-[12.5px] text-clay-600 hover:bg-clay-50"
+                    className="flex min-h-11 w-full items-center gap-2 px-3 py-2.5 text-left text-[12.5px] text-clay-600 hover:bg-clay-50 disabled:text-faint"
                   >
-                    <LogOut className="size-3.5" aria-hidden /> Keluar
+                    <LogOut className="size-3.5" aria-hidden />
+                    {signingOut ? "Keluar…" : "Keluar"}
                   </button>
                 </div>
               )}
