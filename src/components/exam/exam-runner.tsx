@@ -26,60 +26,82 @@ import { ExamTimer } from "./exam-timer";
 import { OptionRow, EssayAnswer, TrueFalseRow, PassagePanel } from "./question-parts";
 import { QuestionGrid, NavLegend, questionState, type NavFilter } from "./question-nav";
 import { BuramLayer } from "./buram-layer";
-import { useExamRunner } from "./exam-store";
+import { useExamRunner, type SaveState } from "./exam-store";
 import { useFocusTrap } from "@/components/ui/use-focus-trap";
 import { useOnline } from "@/lib/client-hooks";
+import { logAttemptEvent } from "@/features/attempts/actions";
 
-type SaveState = "idle" | "saving" | "saved" | "offline" | "error";
-
+/**
+ * Layar pengerjaan (T5.6–T5.11).
+ *
+ * Komponen ini tidak lagi menghitung apa pun: nilai, sisa waktu, dan urutan
+ * soal semuanya berasal dari server. Yang dikerjakannya hanya menampilkan state
+ * dan meneruskan pilihan peserta ke store.
+ */
 export function ExamRunner() {
   const router = useRouter();
   const {
     exam,
     questions,
     attempt,
-    ready,
     setAnswer,
     toggleFlag,
-    toggleCrossout,
     progress,
     submit,
+    saveState,
+    answers,
+    answerFor,
+    answeredCount,
+    flaggedCount,
   } = useExamRunner();
 
   const [index, setIndex] = React.useState(0);
   const [navOpen, setNavOpen] = React.useState(false);
   const [filter, setFilter] = React.useState<NavFilter>("all");
   const [crossoutMode, setCrossoutMode] = React.useState(false);
+  /**
+   * Coretan opsi, disimpan hanya di layar.
+   *
+   * Ini alat bantu berpikir ("opsi ini pasti salah"), bukan jawaban — karena itu
+   * sengaja **tidak** dikirim ke server dan hilang saat halaman dimuat ulang.
+   * Mengirimnya akan menambah kolom database untuk data yang tidak pernah
+   * dinilai, dan peserta yang me-refresh memang seharusnya mendapat lembar bersih
+   * untuk coretan.
+   */
+  const [crossouts, setCrossouts] = React.useState<Record<string, string[]>>({});
   const [buram, setBuram] = React.useState(false);
   const [timerHidden, setTimerHidden] = React.useState(false);
-  const [saveState, setSaveState] = React.useState<SaveState>("idle");
   const online = useOnline();
   const [submitOpen, setSubmitOpen] = React.useState(false);
+  const [submitPending, setSubmitPending] = React.useState(false);
+  const [submitError, setSubmitError] = React.useState<string | null>(null);
   const [exitOpen, setExitOpen] = React.useState(false);
   const [reportOpen, setReportOpen] = React.useState(false);
+  const [reportReason, setReportReason] = React.useState<string>("");
   const [timeUpOpen, setTimeUpOpen] = React.useState(false);
   const [showHint, setShowHint] = React.useState(false);
 
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const buramRef = React.useRef<HTMLDivElement>(null);
   const navRef = React.useRef<HTMLDivElement>(null);
-  const saveTimer = React.useRef<number | null>(null);
 
   useFocusTrap(navOpen, navRef, () => setNavOpen(false));
 
   const question = questions[index];
-  const answer = attempt?.answers[question?.id ?? ""];
-  const state = question ? questionState(question, attempt) : { answered: false, flagged: false };
+  const answer = answerFor(question?.id ?? "");
+  const state = question ? questionState(question, answers) : { answered: false, flagged: false };
 
-  const answered = questions.filter((q) => questionState(q, attempt).answered).length;
-  const flagged = questions.filter((q) => questionState(q, attempt).flagged).length;
+  // Hitungan diambil dari store supaya satu sumber angka dipakai di seluruh
+  // layar: header, dialog kumpulkan, dan filter navigasi tidak bisa berbeda.
+  const answered = answeredCount;
+  const flagged = flaggedCount;
   const unanswered = questions.length - answered;
 
   React.useEffect(() => {
-    if (ready && !attempt) {
-      router.replace(`/u/${exam.code}`);
-    }
-  }, [ready, attempt, exam.code, router]);
+    // Store hanya ada isinya kalau server punya attempt untuk cookie ini.
+    // Kalau tidak, peserta kembali ke halaman pra-ujian — bukan melihat galat.
+    if (!attempt) router.replace(`/u/${exam.code}`);
+  }, [attempt, exam.code, router]);
 
   // PRD Â§9.3: tombol Back peramban tidak boleh meninggalkan attempt tanpa
   // konfirmasi. Kita dorong satu entri riwayat penjaga supaya Back pertama
@@ -98,19 +120,6 @@ export function ExamRunner() {
   React.useEffect(() => {
     scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" });
   }, [index]);
-
-  const markSaving = React.useCallback(() => {
-    if (!navigator.onLine) {
-      setSaveState("offline");
-      return;
-    }
-    setSaveState("saving");
-    if (saveTimer.current) window.clearTimeout(saveTimer.current);
-    saveTimer.current = window.setTimeout(() => {
-      setSaveState("saved");
-      window.setTimeout(() => setSaveState((s) => (s === "saved" ? "idle" : s)), 2400);
-    }, 700);
-  }, []);
 
   const goTo = React.useCallback(
     (next: number) => {
@@ -148,10 +157,7 @@ export function ExamRunner() {
       if (e.key === "ArrowLeft") goTo(index - 1);
       if (question?.type !== "essay" && /^[a-eA-E]$/.test(e.key)) {
         const opt = question.options["abcde".indexOf(e.key.toLowerCase())];
-        if (opt) {
-          setAnswer(question.id, { selectedOptionIds: [opt.id], touched: true });
-          markSaving();
-        }
+        if (opt) setAnswer(question.id, { selectedOptionIds: [opt.id], touched: true });
       }
     };
     window.addEventListener("keydown", onKey);
@@ -168,7 +174,6 @@ export function ExamRunner() {
     navOpen,
     buram,
     crossoutMode,
-    markSaving,
   ]);
 
   if (!attempt || !question) {
@@ -191,19 +196,63 @@ export function ExamRunner() {
     } else {
       setAnswer(question.id, { selectedOptionIds: [optionId], touched: true });
     }
-    markSaving();
   };
 
-  const doSubmit = () => {
-    submit("manual");
-    setSubmitOpen(false);
-    router.push(`/hasil/demo-result-token`);
+  /** Coret/batalkan coret satu opsi. Hanya tampilan, tidak dikirim ke server. */
+  const toggleCrossout = (questionId: string, optionId: string) => {
+    setCrossouts((prev) => {
+      const current = prev[questionId] ?? [];
+      const next = current.includes(optionId)
+        ? current.filter((id) => id !== optionId)
+        : [...current, optionId];
+      return { ...prev, [questionId]: next };
+    });
   };
 
-  const finishTimeout = () => {
-    submit("timeout");
-    setTimeUpOpen(false);
-    router.push(`/hasil/demo-result-token`);
+  /**
+   * Kirim laporan soal (INT-02).
+   *
+   * Laporan masuk sebagai `attempt_events` dengan `meta.questionId`, sehingga
+   * guru melihatnya di halaman penilaian bersama kejadian lain. Sebelumnya
+   * tombol ini hanya menampilkan toast tanpa menyimpan apa pun.
+   */
+  const sendReport = () => {
+    setReportOpen(false);
+    setShowHint(true);
+    window.setTimeout(() => setShowHint(false), 2600);
+
+    void logAttemptEvent({
+      code: exam.code,
+      type: "report",
+      meta: { questionId: question.id, reason: reportReason || "tanpa alasan" },
+    });
+  };
+
+  /** Kirim jawaban, lalu pindah ke halaman hasil memakai token dari server. */
+  const finishAndGoToResult = async () => {
+    setSubmitPending(true);
+    setSubmitError(null);
+
+    const result = await submit();
+    setSubmitPending(false);
+
+    if (!result.ok || !result.resultToken) {
+      setSubmitError(result.message ?? "Gagal mengumpulkan. Coba lagi.");
+      return;
+    }
+
+    router.push(`/hasil/${result.resultToken}`);
+  };
+
+  const doSubmit = async () => {
+    await finishAndGoToResult();
+  };
+
+  const finishTimeout = async () => {
+    // Waktu habis: database sudah mengumpulkan otomatis lewat
+    // `finalize_if_expired`. Panggilan ini memastikan status dan token hasil
+    // terbaca, bukan menghitung ulang.
+    await finishAndGoToResult();
   };
 
   const filters: [NavFilter, string][] = [
@@ -232,7 +281,7 @@ export function ExamRunner() {
               {attempt.participantName}
             </h1>
             <p className="hidden truncate text-[12px] text-muted sm:block">
-              {exam.subjectLabel.split("Â·")[0]?.trim() || exam.title}
+              {exam.subjectLabel?.split("·")[0]?.trim() || exam.title}
             </p>
           </div>
         </div>
@@ -291,8 +340,8 @@ export function ExamRunner() {
 
       {!online && (
         <div className="animate-rise flex items-center justify-center gap-2 border-b border-accent-200 bg-accent-100 px-4 py-2 text-[12.5px] font-semibold text-accent-900">
-          <WifiOff className="size-3.5" aria-hidden /> Tidak ada koneksi. Jawaban tersimpan di
-          perangkat ini dan dikirim saat online.
+          <WifiOff className="size-3.5" aria-hidden /> Tidak ada koneksi. Jawaban yang belum terkirim
+          akan dikirim saat online — jangan tutup halaman ini.
         </div>
       )}
 
@@ -321,10 +370,7 @@ export function ExamRunner() {
                   <div className="flex flex-wrap items-center gap-1.5">
                     <button
                       type="button"
-                      onClick={() => {
-                        toggleFlag(question.id);
-                        markSaving();
-                      }}
+                      onClick={() => toggleFlag(question.id)}
                       aria-pressed={state.flagged}
                       className={cn(
                         "press flex min-h-11 items-center gap-1.5 rounded-field px-3 font-heading text-[12.5px] font-semibold transition-colors",
@@ -380,14 +426,15 @@ export function ExamRunner() {
 
                   <p className="text-[16px] leading-[1.75] text-ink">{question.body}</p>
 
-                  {question.mediaCaption && (
+                  {question.mediaUrl && (
                     <figure className="overflow-hidden rounded-card border border-line bg-surface p-3">
-                      <div className="grid h-40 place-items-center rounded-field bg-line-soft text-[12px] text-muted">
-                        Gambar soal: {question.mediaCaption}
-                      </div>
-                      <figcaption className="mt-2 text-center text-[12px] text-muted">
-                        Gambar belum tersedia di mode demo.
-                      </figcaption>
+                      {/* URL bertanda tangan berumur pendek; lihat catatan di question-parts. */}
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={question.mediaUrl}
+                        alt={`Gambar soal ${index + 1}`}
+                        className="mx-auto max-h-80 w-auto rounded-field"
+                      />
                     </figure>
                   )}
 
@@ -396,16 +443,13 @@ export function ExamRunner() {
                       value={answer?.essayText ?? ""}
                       wordMin={question.wordMin}
                       wordMax={question.wordMax}
-                      onChange={(next) => {
-                        setAnswer(question.id, { essayText: next, touched: true });
-                        markSaving();
-                      }}
+                      onChange={(next) => setAnswer(question.id, { essayText: next, touched: true })}
                     />
                   ) : question.type === "true_false" ? (
                     /*
                      * Setiap pernyataan dinilai Benar atau Salah. "Benar"
                      * berarti opsi itu masuk `selectedOptionIds`; "Salah"
-                     * berarti tidak â€” karena itu penilaiannya memakai aturan
+                     * berarti tidak — karena itu penilaiannya memakai aturan
                      * "semua benar" yang sama dengan PG banyak jawaban.
                      */
                     <div className="space-y-2.5">
@@ -437,7 +481,6 @@ export function ExamRunner() {
                                 selectedOptionIds: next ? [...without, opt.id] : without,
                                 touched: true,
                               });
-                              markSaving();
                             }}
                           />
                         );
@@ -457,14 +500,11 @@ export function ExamRunner() {
                           option={opt}
                           index={i}
                           selected={(answer?.selectedOptionIds ?? []).includes(opt.id)}
-                          crossed={(answer?.crossouts ?? []).includes(opt.id)}
+                          crossed={(crossouts[question.id] ?? []).includes(opt.id)}
                           crossoutMode={crossoutMode}
                           multi={question.type === "mcq_multiple"}
                           onSelect={() => selectOption(opt.id)}
-                          onToggleCrossout={() => {
-                            toggleCrossout(question.id, opt.id);
-                            markSaving();
-                          }}
+                          onToggleCrossout={() => toggleCrossout(question.id, opt.id)}
                         />
                       ))}
                     </div>
@@ -554,7 +594,7 @@ export function ExamRunner() {
             <div className="scroll-thin flex-1 overflow-y-auto px-4 py-4">
               <QuestionGrid
                 questions={questions}
-                attempt={attempt}
+                answers={answers}
                 currentId={question.id}
                 onJump={jumpTo}
                 filter={filter}
@@ -569,7 +609,7 @@ export function ExamRunner() {
                   {attempt.resumeCode}
                 </p>
                 <p className="mt-0.5 text-[11.5px] leading-snug text-muted">
-                  Simpan kode ini untuk membuka pengerjaan ini lagi di perangkat yang sama.
+                  Simpan kode ini untuk melanjutkan di perangkat lain bila perlu.
                 </p>
               </div>
             </div>
@@ -623,7 +663,7 @@ export function ExamRunner() {
             <div className="scroll-thin max-h-[48dvh] overflow-y-auto px-4 py-3">
               <QuestionGrid
                 questions={questions}
-                attempt={attempt}
+                answers={answers}
                 currentId={question.id}
                 onJump={jumpTo}
                 filter={filter}
@@ -663,10 +703,13 @@ export function ExamRunner() {
         }
         footer={
           <>
-            <Button variant="secondary" onClick={() => setSubmitOpen(false)}>
+            <Button variant="secondary" onClick={() => setSubmitOpen(false)} disabled={submitPending}>
               Periksa lagi
             </Button>
-            <Button onClick={doSubmit}>Ya, kumpulkan</Button>
+            <Button onClick={doSubmit} disabled={submitPending}>
+              {submitPending ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+              Ya, kumpulkan
+            </Button>
           </>
         }
       >
@@ -692,6 +735,15 @@ export function ExamRunner() {
               tanpa pengurangan nilai.
             </p>
           )}
+          {submitError && (
+            <p
+              role="alert"
+              className="flex items-start gap-1.5 rounded-field bg-clay-50 px-2.5 py-2 text-[12.5px] font-medium text-clay-700"
+            >
+              <X className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+              {submitError}
+            </p>
+          )}
         </div>
       </Modal>
 
@@ -699,7 +751,7 @@ export function ExamRunner() {
         open={exitOpen}
         onClose={() => setExitOpen(false)}
         title="Keluar dari ujian?"
-        description="Jawaban kamu tersimpan di perangkat ini dan bisa dilanjutkan. Waktu ujian tetap berjalan."
+        description="Jawabanmu sudah tersimpan di server dan bisa dilanjutkan. Waktu ujian tetap berjalan."
         icon={
           <span className="grid size-10 place-items-center rounded-card bg-accent-100 text-accent-900">
             <ArrowLeft className="size-5" aria-hidden />
@@ -710,7 +762,7 @@ export function ExamRunner() {
             <Button variant="secondary" onClick={() => setExitOpen(false)}>
               Tetap di sini
             </Button>
-            <Button onClick={() => router.push(`/u/${exam.code}`)}>Simpan dan keluar</Button>
+            <Button onClick={() => router.push(`/u/${exam.code}`)}>Keluar</Button>
           </>
         }
       >
@@ -729,7 +781,7 @@ export function ExamRunner() {
         open={reportOpen}
         onClose={() => setReportOpen(false)}
         title="Laporkan masalah"
-        description={`Soal ${index + 1} Â· ${exam.subjectLabel}`}
+        description={`Soal ${index + 1} · ${exam.subjectLabel ?? exam.title}`}
         icon={
           <span className="grid size-10 place-items-center rounded-card bg-accent-100 text-accent-900">
             <MessageSquareWarning className="size-5" aria-hidden />
@@ -740,15 +792,7 @@ export function ExamRunner() {
             <Button variant="secondary" onClick={() => setReportOpen(false)}>
               Batal
             </Button>
-            <Button
-              onClick={() => {
-                setReportOpen(false);
-                setShowHint(true);
-                window.setTimeout(() => setShowHint(false), 2600);
-              }}
-            >
-              Kirim laporan
-            </Button>
+            <Button onClick={sendReport}>Kirim laporan</Button>
           </>
         }
       >
@@ -764,13 +808,19 @@ export function ExamRunner() {
               key={reason}
               className="press flex min-h-11 items-center gap-2.5 rounded-field border border-line px-3 text-[13.5px] text-ink-soft hover:bg-line-soft"
             >
-              <input type="radio" name="report" className="accent-navy-700" />
+              <input
+                type="radio"
+                name="report"
+                className="accent-navy-700"
+                checked={reportReason === reason}
+                onChange={() => setReportReason(reason)}
+              />
               {reason}
             </label>
           ))}
         </div>
         <p className="mt-2 text-[12px] leading-relaxed text-muted">
-          Laporan hanya tercatat di perangkat ini selama mode demo.
+          Laporan tercatat bersama nomor soal ini dan ikut terlihat gurumu di halaman penilaian.
         </p>
       </Modal>
 
@@ -785,12 +835,17 @@ export function ExamRunner() {
             <X className="size-5" aria-hidden />
           </span>
         }
-        footer={<Button onClick={finishTimeout}>Lihat hasil</Button>}
+        footer={
+          <Button onClick={finishTimeout} disabled={submitPending}>
+            {submitPending ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+            Lihat hasil
+          </Button>
+        }
       />
 
       {showHint && (
         <div className="animate-rise fixed bottom-24 left-1/2 z-[90] -translate-x-1/2 rounded-field bg-navy-900 px-4 py-2 text-[12.5px] font-semibold text-white shadow-pop">
-          Laporan tercatat di perangkat ini
+          Laporan terkirim ke gurumu
         </div>
       )}
     </div>
@@ -798,9 +853,12 @@ export function ExamRunner() {
 }
 
 /**
- * Indikator simpan menyebut tempat penyimpanan yang sebenarnya. Menulis
- * "tersimpan" tanpa kualifikasi akan membuat peserta mengira jawabannya sudah
- * ada di server (DESIGN.md Â§9).
+ * Indikator simpan menyebut tempat penyimpanan yang sebenarnya.
+ *
+ * Sebelumnya tulisan terakhirnya "Tersimpan di perangkat" karena memang begitu
+ * keadaannya. Sekarang jawaban benar-benar pergi ke server, jadi kalimat itu
+ * harus ikut berubah — dan keadaan `error` mendapat kalimat sendiri supaya
+ * peserta tidak mengira jawabannya sudah aman.
  */
 function SaveIndicator({ state, online }: { state: SaveState; online: boolean }) {
   if (!online) {
@@ -824,9 +882,16 @@ function SaveIndicator({ state, online }: { state: SaveState; online: boolean })
       </span>
     );
   }
+  if (state === "error") {
+    return (
+      <span className="flex items-center gap-1.5 rounded-full bg-clay-50 px-2.5 py-1 text-[11.5px] font-semibold text-clay-700">
+        <CloudOff className="size-3.5" aria-hidden /> Gagal menyimpan
+      </span>
+    );
+  }
   return (
     <span className="hidden items-center gap-1.5 rounded-full px-2 py-1 text-[11.5px] font-semibold text-muted sm:flex">
-      <Cloud className="size-3.5" aria-hidden /> Tersimpan di perangkat
+      <Cloud className="size-3.5" aria-hidden /> Tersimpan di server
     </span>
   );
 }

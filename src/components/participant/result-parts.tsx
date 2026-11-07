@@ -1,23 +1,21 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowLeft, Copy, Download } from "lucide-react";
+import { ArrowLeft, Copy, Printer } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useOriginLabel } from "@/lib/client-hooks";
-import { useParticipantName } from "@/lib/participant-identity";
 
 /*
- * Sapaan memakai nama yang benar-benar diisi peserta di form awal.
- * Kalau perangkat ini belum pernah mengisi form, yang tampil adalah sapaan
- * netral, bukan nama contoh (DESIGN.md §9).
+ * Sapaan memakai nama yang tercatat di attempt, dikirim server sebagai prop.
+ * Sebelumnya nama dibaca dari `localStorage` — cara itu menampilkan sapaan
+ * netral untuk peserta yang membuka tautan hasil di perangkat lain, dan bisa
+ * dimanipulasi lewat DevTools.
  */
-export function ResultGreeting() {
-  const identity = useParticipantName();
-
+export function ResultGreeting({ name }: { name: string }) {
   return (
     <h1 className="mt-1.5 font-heading text-[24px] font-extrabold leading-tight text-ink sm:text-[26px]">
-      {identity ? `Selesai, ${identity.name}.` : "Ujian sudah dikumpulkan."}
+      Selesai, {name}.
     </h1>
   );
 }
@@ -48,15 +46,19 @@ export function ResultLink({ token }: { token: string }) {
   );
 }
 
-/** Unduhan belum punya generator PDF di sisi server, jadi dikatakan apa adanya. */
-export function ResultDownload() {
+/**
+ * Cetak/simpan PDF lewat dialog cetak peramban.
+ *
+ * Sebelumnya tombol ini hanya memunculkan toast "belum tersedia di mode demo".
+ * Pembuatan PDF di server belum ada (butuh pustaka tambahan dan template), tetapi
+ * mencetak halaman yang sedang terbuka benar-benar berfungsi dan menghasilkan
+ * berkas PDF yang sama isinya. Tombol yang bekerja lebih baik daripada tombol
+ * yang menjelaskan bahwa ia tidak bekerja.
+ */
+export function ResultPrint() {
   return (
-    <Button
-      variant="secondary"
-      size="md"
-      onClick={() => toast("Unduhan ringkasan belum tersedia di mode demo.")}
-    >
-      <Download className="size-3.5" aria-hidden /> Unduh ringkasan
+    <Button variant="secondary" size="md" onClick={() => window.print()}>
+      <Printer className="size-3.5" aria-hidden /> Cetak / simpan PDF
     </Button>
   );
 }

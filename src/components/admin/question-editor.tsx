@@ -19,7 +19,8 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { Field, Input, Select, Textarea } from "@/components/ui/field";
-import type { Question, QuestionType } from "@/lib/types";
+import type { AdminQuestion } from "@/features/questions/types";
+import type { QuestionType } from "@/lib/types";
 
 export interface DraftQuestion {
   key: string;
@@ -27,13 +28,30 @@ export interface DraftQuestion {
   body: string;
   /** Teks bacaan bersama; kosong/null bila soal tidak memerlukannya. */
   passage?: string;
+  /**
+   * Path gambar di bucket privat. **Wajib dibawa** saat menyimpan: RPC
+   * `save_exam_questions` menghapus lalu membuat ulang baris soal, jadi path
+   * yang tidak ikut dikirim akan hilang — dan 45 soal bank soal punya gambar.
+   * Editor belum bisa mengunggah gambar (T4.4), tetapi ia tidak boleh merusak
+   * gambar yang sudah ada.
+   */
+  mediaPath?: string;
+  /** URL bertanda tangan untuk pratinjau; hanya untuk tampilan. */
+  mediaUrl?: string;
   points: number;
-  options: { id: string; body: string }[];
+  options: DraftOption[];
   correct: string[];
   explanation: string;
   wordMin?: number;
   wordMax?: number;
   referenceAnswer?: string;
+}
+
+export interface DraftOption {
+  id: string;
+  body: string;
+  mediaPath?: string;
+  mediaUrl?: string;
 }
 
 let counter = 0;
@@ -59,18 +77,73 @@ export function emptyQuestion(): DraftQuestion {
   };
 }
 
-export function questionFromModel(q: Question): DraftQuestion {
+/**
+ * Ubah soal dari database menjadi bentuk yang bisa disunting.
+ *
+ * `key` memakai ID asli supaya pemilihan soal di daftar kiri tidak melompat
+ * setiap kali daftar dirender ulang. `mediaPath`/`mediaUrl` dibawa apa adanya —
+ * lihat catatan di `DraftQuestion`.
+ */
+export function questionFromModel(q: AdminQuestion): DraftQuestion {
   return {
     key: q.id,
     type: q.type,
     body: q.body,
+    passage: q.passage ?? undefined,
+    mediaPath: q.mediaPath ?? undefined,
+    mediaUrl: q.mediaUrl ?? undefined,
     points: q.points,
-    options: q.options.map((o) => ({ id: o.id, body: o.body })),
-    correct: [...q.correctOptionIds],
+    options: q.options.map((o) => ({
+      id: o.id,
+      body: o.body,
+      mediaPath: o.mediaPath ?? undefined,
+      mediaUrl: o.mediaUrl ?? undefined,
+    })),
+    correct: q.options.filter((o) => o.isCorrect).map((o) => o.id),
     explanation: q.explanation ?? "",
+    wordMin: q.wordMin ?? undefined,
+    wordMax: q.wordMax ?? undefined,
+    referenceAnswer: q.referenceAnswer ?? undefined,
+  };
+}
+
+/**
+ * Kebalikannya: bentuk editor → payload RPC.
+ *
+ * ID opsi tidak dikirim karena opsi selalu dibuat ulang; yang menentukan kunci
+ * adalah `isCorrect` per opsi. `mediaPath` **ikut dikirim** meski editor belum
+ * bisa mengunggah gambar, supaya menyimpan tidak menghapus gambar yang ada.
+ */
+export function questionToPayload(q: DraftQuestion): {
+  type: QuestionType;
+  body: string;
+  passage?: string;
+  mediaPath?: string;
+  points: number;
+  wordMin?: number;
+  wordMax?: number;
+  referenceAnswer?: string;
+  explanation?: string;
+  options: { body: string; mediaPath?: string; isCorrect: boolean }[];
+} {
+  return {
+    type: q.type,
+    body: q.body,
+    passage: q.passage,
+    mediaPath: q.mediaPath,
+    points: q.points,
     wordMin: q.wordMin,
     wordMax: q.wordMax,
     referenceAnswer: q.referenceAnswer,
+    explanation: q.explanation,
+    options:
+      q.type === "essay"
+        ? []
+        : q.options.map((option) => ({
+            body: option.body,
+            mediaPath: option.mediaPath,
+            isCorrect: q.correct.includes(option.id),
+          })),
   };
 }
 
@@ -729,7 +802,7 @@ function CsvImportModal({
         reset();
       }}
       title="Impor soal dari CSV"
-      description="Tempel isi CSV di bawah. Tidak ada data yang diunggah ke server pada demo ini."
+      description="Tempel isi CSV di bawah, periksa pratinjaunya, lalu tambahkan ke daftar soal."
       size="lg"
       icon={
         <span className="grid size-10 place-items-center rounded-full bg-leaf-100 text-leaf-800">

@@ -1,10 +1,10 @@
 "use client";
 
-import * as React from "react";
 import Link from "next/link";
 import { CalendarClock, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useCountdown } from "@/components/exam/use-countdown";
+import { formatDateTimeId } from "@/lib/utils";
 
 /**
  * Ditampilkan sebagai ganti formulir mulai ketika ujian belum dibuka atau sudah
@@ -14,9 +14,11 @@ import { useCountdown } from "@/components/exam/use-countdown";
 export function ClosedNotice({
   state,
   opensAt,
+  closesAt,
 }: {
   state: "scheduled" | "closed";
   opensAt?: string;
+  closesAt?: string;
 }) {
   const time = useCountdown(state === "scheduled" ? (opensAt ?? null) : null);
 
@@ -28,6 +30,12 @@ export function ClosedNotice({
           Peserta baru tidak bisa masuk lagi. Kalau kamu sudah mengerjakan, buka tautan hasil yang
           diberikan pembuat ujian untuk melihat nilaimu.
         </p>
+
+        {closesAt && (
+          <p className="mt-2 text-[12px] text-muted">
+            Ditutup sejak {formatDateTimeId(closesAt)} WIB.
+          </p>
+        )}
 
         <div className="mt-4 space-y-2">
           <Button block size="md" variant="secondary" disabled>

@@ -80,3 +80,19 @@ export function randomCode(length = 6) {
 export function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
+
+/**
+ * Huruf untuk label opsi (A, B, C, …).
+ *
+ * Dulu tinggal di `lib/mock-data.ts` karena hanya dipakai runner demo. Sekarang
+ * dipakai juga oleh editor soal dan halaman penilaian yang membaca database,
+ * jadi tempatnya di sini — bukan di berkas data contoh yang sudah dihapus.
+ *
+ * Di luar A–Z mengembalikan "?" alih-alih melempar: satu opsi tanpa label jauh
+ * lebih baik daripada halaman penilaian yang gagal total.
+ */
+const OPTION_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+export function optionLabel(index: number) {
+  return OPTION_LETTERS[index] ?? "?";
+}

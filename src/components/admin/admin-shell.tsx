@@ -15,7 +15,6 @@ import {
 } from "lucide-react";
 import { Logo } from "@/components/ui/primitives";
 import { cn, initials } from "@/lib/utils";
-import { demoExam } from "@/lib/mock-data";
 import { signOut } from "@/features/auth/actions";
 import { useFocusTrap } from "@/components/ui/use-focus-trap";
 
@@ -58,8 +57,6 @@ function buildCrumbs(pathname: string) {
     })
     .map((segment) => {
       if (CRUMBS[segment]) return CRUMBS[segment];
-      if (/^exm_/i.test(segment)) return demoExam.code;
-      if (/^att_/i.test(segment)) return "Attempt";
       return segment.replace(/-/g, " ");
     });
 }
@@ -171,8 +168,7 @@ export function AdminShell({
 
       <div className="border-t border-line p-3">
         <p className="px-1 text-[11.5px] leading-relaxed text-muted">
-          Daftar ujian dan statusnya sudah tersimpan di server. Soal, dashboard, dan rekap
-          nilai masih memakai data contoh.
+          Semua daftar ujian, soal, dan nilai dibaca langsung dari database.
         </p>
       </div>
     </div>

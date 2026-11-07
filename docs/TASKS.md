@@ -487,9 +487,10 @@ Semua task di fase ini diverifikasi lewat `db lint` + uji HTTP ke Data API.
     `audit_logs` mencatat rantai `duplicate_exam → archive_exam → delete_exam` dengan `entity_id`
     yang tetap menunjuk ujian yang sudah tidak ada — justru itu gunanya.
 
-- [ ] **T3.9: Penguncian setelah attempt pertama (EXM-09)** `P0` `M`
+- [x] **T3.9: Penguncian setelah attempt pertama (EXM-09)** `P0` `M`
   - Cakupan: aksi soal menolak perubahan isi/poin bila `exists(attempts)`; UI read-only; metadata yang diizinkan tetap bisa diubah; `locked` di halaman soal dihitung dari data, bukan `const locked = true`.
   - Selesai bila: ujian tanpa attempt bisa diedit, yang punya attempt tidak.
+  - **Hasil (7 November 2026):** kunci ditegakkan di database, bukan hanya di UI. `save_exam_questions` menolak (`EXAM_LOCKED`) begitu ada baris `attempts`, jadi permintaan di luar UI pun gagal. Halaman soal menghitung `locked` dari `examHasAttempts()`, bukan `const locked = true`. Diuji `scripts/test-save-questions.cjs` (36/36).
 
 - [ ] **T3.10: Pratinjau peserta (EXM-11)** `P1` `M`
   - Cakupan: rute pratinjau memakai komponen runner dengan data ujian nyata, tanpa membuat attempt, dengan banner "Mode pratinjau".
@@ -593,13 +594,15 @@ penyusunnya.
 
 ## Fase 4: Soal dan impor (M2)
 
-- [ ] **T4.1: Aksi CRUD soal** `P0` `M`
+- [x] **T4.1: Aksi CRUD soal (diganti satu RPC transaksional)** `P0` `M`
   - Cakupan: `createQuestion`, `updateQuestion`, `deleteQuestion`, `reorderQuestions`, semua dengan Zod + `requireAdmin()`.
   - Selesai bila: reorder mengirim urutan final dan `position` unik tetap terjaga.
+  - **Hasil (7 November 2026):** `createQuestion`/`updateQuestion`/`deleteQuestion`/`reorderQuestions` tidak dibuat terpisah. Editor mengirim **seluruh daftar** ke `save_exam_questions` dalam satu transaksi: satu urutan final, `position` unik, dan tidak ada keadaan setengah tersimpan bila satu baris gagal. `mediaPath` disalin dari payload agar gambar 45 soal bank soal tidak hilang saat baris diganti.
 
-- [ ] **T4.2: Editor soal menyimpan sungguhan** `P0` `M`
+- [x] **T4.2: Editor soal menyimpan sungguhan** `P0` `M`
   - Cakupan: `question-editor.tsx` memakai aksi; status `dirty`/`saving`; validasi inline (opsi ≥ 2, kunci wajib, poin > 0).
   - Selesai bila: refresh halaman setelah simpan menampilkan isi terbaru.
+  - **Hasil (7 November 2026):** `editor-client.tsx` memakai `saveExamQuestions`, status `dirty`/`saving`, validasi inline, dan sinkronisasi berbasis tanda tangan ID soal. Refresh menampilkan isi terbaru; `scripts/test-admin-pages.cjs` memverifikasi simpan tanpa perubahan tidak mengurangi jumlah soal maupun gambar (22/22).
 
 - [ ] **T4.3: Teks soal berformat dasar (QST-04)** `P0` `L`
   - Cakupan: toolbar tebal/miring/daftar pada `body` soal dan opsi sesuai **K4**; render aman di runner dan pratinjau; sanitasi.
@@ -639,27 +642,27 @@ penyusunnya.
 
 Ini fase yang menutup tiga pelanggaran prinsip. Kerjakan berurutan.
 
-- [ ] **T5.1: Sesi peserta berbasis cookie** `P0` `M`
+- [x] **T5.1: Sesi peserta berbasis cookie** `P0` `M`
   - Cakupan: `src/lib/participant-session.ts`: set/baca/hapus cookie `kilat_attempt_<kode>` (httpOnly, Secure, SameSite=Lax), simpan hanya hash SHA-256 di database.
   - Selesai bila: cookie tidak dapat dibaca `document.cookie`; token tidak pernah muncul di URL.
 
-- [ ] **T5.2: Pra-ujian dengan data nyata** `P0` `M`
+- [x] **T5.2: Pra-ujian dengan data nyata** `P0` `M`
   - Cakupan: `getExamByCode` di `/u/[code]`; empat keadaan GST-08 (belum dibuka + hitung mundur, berlangsung, ditutup, kode tidak ditemukan) dari jadwal nyata; tampilkan sisa percobaan; kelas muncul bila `ask_class`.
   - Selesai bila: mengubah `opens_at` di database mengubah tampilan tanpa deploy.
 
-- [ ] **T5.3: `startAttempt` + aturan nama** `P0` `M`
+- [x] **T5.3: `startAttempt` + aturan nama** `P0` `M`
   - Cakupan: validasi nama 2–60 karakter, normalisasi, kuota percobaan, `NO_ATTEMPTS_LEFT`, `EXAM_NOT_OPEN`, `EXAM_CLOSED`; pasang cookie; arahkan ke runner.
   - Selesai bila: nama "  Rina  " dan "rina" dihitung satu peserta.
 
-- [ ] **T5.4: `NAME_IN_USE` dan alur Kode Lanjut** `P0` `M`
+- [x] **T5.4: `NAME_IN_USE` dan alur Kode Lanjut** `P0` `M`
   - Cakupan: tolak nama yang sedang mengerjakan tanpa cookie dengan pesan jelas + tawarkan kolom Kode Lanjut (GST-06, GST-07).
   - Selesai bila: dua perangkat, nama sama, tanpa kode → peserta kedua ditolak dengan pesan yang bisa ditindaklanjuti.
 
-- [ ] **T5.5: `resumeAttempt` mencabut sesi lama** `P1` `M`
+- [x] **T5.5: `resumeAttempt` mencabut sesi lama** `P1` `M`
   - Cakupan: cocokkan `resume_code`, terbitkan `token_hash` baru, batasi laju; perangkat lama menerima status dicabut.
   - Selesai bila: perangkat pertama berhenti menyimpan dan menampilkan "Ujian dilanjutkan di perangkat lain" (RUN-11).
 
-- [ ] **T5.6: Runner membaca state dari server** `P0` `L`
+- [x] **T5.6: Runner membaca state dari server** `P0` `L`
   - Cakupan: `ExamRunnerProvider` mengambil `getAttemptState` (bukan `localStorage` `kilat_attempt_v1`), urutan soal dari `question_order`, jawaban tersimpan, flag, `resume_code`; hapus pembuatan attempt lokal.
   - Selesai bila: hapus semua `localStorage` lalu buka runner → attempt tetap pulih lewat cookie.
 
@@ -667,7 +670,7 @@ Ini fase yang menutup tiga pelanggaran prinsip. Kerjakan berurutan.
   - Cakupan: hitung selisih `server_now` vs jam klien sekali saat muat, lalu pakai offset itu; `expires_at` dari server.
   - Selesai bila: mengubah jam perangkat +2 jam tidak mengubah sisa waktu.
 
-- [ ] **T5.8: Autosave debounce + indikator (RUN-03)** `P0` `M`
+- [x] **T5.8: Autosave debounce + indikator (RUN-03)** `P0` `M`
   - Cakupan: `saveAnswer` debounce 800 ms, indikator "Menyimpan… / Tersimpan / Gagal, coba lagi", kirim ulang saat gagal.
   - Selesai bila: memilih opsi menampilkan urutan status yang benar; p95 ≤ 2 detik di lokal.
 
@@ -675,19 +678,19 @@ Ini fase yang menutup tiga pelanggaran prinsip. Kerjakan berurutan.
   - Cakupan: antrean lokal berurutan (IndexedDB atau `localStorage`), banner "Tidak ada koneksi", kirim ulang otomatis saat `online`, tanpa kehilangan urutan.
   - Selesai bila: matikan jaringan, jawab 3 soal, nyalakan → semua tersimpan berurutan.
 
-- [ ] **T5.10: Auto-submit dan peringatan waktu (RUN-06/07)** `P0` `S`
+- [x] **T5.10: Auto-submit dan peringatan waktu (RUN-06/07)** `P0` `S`
   - Cakupan: submit otomatis saat `expires_at` lewat dengan alasan `timeout`; peringatan 5 menit dan 1 menit (teks + `aria-live`, bukan hanya warna).
   - Selesai bila: memajukan jam melewati `expires_at` memicu submit dan halaman selesai.
 
-- [ ] **T5.11: Dialog kumpulkan dan halaman selesai (RUN-08/09)** `P0` `M`
+- [x] **T5.11: Dialog kumpulkan dan halaman selesai (RUN-08/09)** `P0` `M`
   - Cakupan: dialog menampilkan jumlah belum dijawab + ditandai ragu; `submitAttempt`; halaman selesai menampilkan skor sesuai visibilitas, tombol salin tautan hasil, pesan esai menunggu penilaian.
   - Selesai bila: submit ganda tidak menggandakan attempt.
 
-- [ ] **T5.12: Halaman hasil nyata (RUN-10)** `P0` `M`
+- [x] **T5.12: Halaman hasil nyata (RUN-10)** `P0` `M`
   - Cakupan: `/hasil/[resultToken]` memakai `getResult`; patuhi `result_visibility` + `result_release` (`instant`/`after_close`/`manual`); hapus nama "Rina" dan skor hardcoded.
   - Selesai bila: `hidden` tidak menampilkan skor; `manual` menampilkan "menunggu rilis" sampai `results_released_at` diisi.
 
-- [ ] **T5.13: Log kejadian integritas (INT-02)** `P1` `M`
+- [x] **T5.13: Log kejadian integritas (INT-02)** `P1` `M`
   - Cakupan: kirim `visibilitychange`, keluar fullscreen, `paste` lewat `logAttemptEvent` dengan stempel waktu; tampil di monitor dan halaman penilaian.
   - Selesai bila: berpindah tab 2× tercatat 2 baris `attempt_events`.
 
@@ -695,23 +698,31 @@ Ini fase yang menutup tiga pelanggaran prinsip. Kerjakan berurutan.
   - Cakupan: pastikan `shuffle_questions`/`shuffle_options` benar-benar dipakai RPC dan runner mengikuti urutan tersimpan; hilangkan pengaturan yang tidak berefek.
   - Selesai bila: dua attempt berbeda punya urutan berbeda dan masing-masing stabil setelah reload.
 
-- [ ] **T5.15: Bersihkan kebocoran kunci jawaban** `P0` `S`
+- [x] **T5.15: Bersihkan kebocoran kunci jawaban** `P0` `S`
   - Cakupan: `mock-data.ts` tidak lagi diimpor rute peserta; `correctOptionIds`, `referenceAnswer`, `explanation` tidak ada di bundel klien peserta; skor tidak dihitung di `exam-store.tsx`.
   - Selesai bila: `grep -r "correctOptionIds" .next/static` tidak menemukan data soal peserta.
+
+
+**Hasil Fase 5 (7 November 2026):** alur peserta nyata sudah berjalan ujung-ke-ujung di `/u/[code]` → `/kerjakan` → `/hasil/[resultToken]`; `scripts/test-participant-flow.cjs` lolos 23/23 (mulai, jawab, muat ulang, kumpulkan, nilai esai lewat UI admin, bersihkan).
+
+Yang **belum** selesai dan sengaja tidak dicentang:
+- **T5.7:** `expires_at` berasal dari server, tetapi hitung mundur masih memakai jam perangkat (`Date.now()` di `use-countdown.ts`), belum offset `server_now`. Konsekuensinya jam perangkat yang diubah menggeser tampilan; server tetap menolak simpanan setelah `expires_at` dan cron menutup attempt.
+- **T5.9:** banner offline ada (`useOnline`), tetapi antrean IndexedDB/localStorage belum dibuat; jawaban yang dipilih saat offline belum dijamin terkirim ulang berurutan.
+- **T5.14:** `shuffle_questions`/`shuffle_options` sudah dipakai RPC dan runner mengikuti `question_order`, tetapi belum ada uji yang membuktikan dua attempt mendapat urutan berbeda dan stabil setelah reload.
 
 ---
 
 ## Fase 6: Penilaian dan rekap (M4)
 
-- [ ] **T6.1: Antrian esai dan `gradeEssay`** `P0` `M`
+- [x] **T6.1: Antrian esai dan `gradeEssay`** `P0` `M`
   - Cakupan: `listEssayQueue(examId, {filter})`, `gradeEssay(attemptId, questionId, points, feedback)`; batas poin; status otomatis jadi `graded` saat semua esai selesai.
   - Selesai bila: menilai esai terakhir memindahkan attempt ke `graded`.
 
-- [ ] **T6.2: Halaman penilaian memakai data nyata** `P0` `M`
+- [x] **T6.2: Halaman penilaian memakai data nyata** `P0` `M`
   - Cakupan: `grading/[attemptId]` menampilkan jawaban peserta, kunci acuan, jumlah kata, komentar; tombol "Simpan dan Berikutnya" menyimpan lalu memuat esai berikutnya; filter belum dinilai.
   - Selesai bila: reload mempertahankan skor yang sudah disimpan.
 
-- [ ] **T6.3: Detail attempt lengkap (RPT-04)** `P0` `M`
+- [x] **T6.3: Detail attempt lengkap (RPT-04)** `P0` `M`
   - Cakupan: tambahkan bagian PG: jawaban vs kunci, skor per soal, total; tambahkan panel **log kejadian**.
   - Selesai bila: satu halaman menampilkan jawaban, skor, dan log tanpa data demo.
 
@@ -719,11 +730,11 @@ Ini fase yang menutup tiga pelanggaran prinsip. Kerjakan berurutan.
   - Cakupan: `overrideScore` dengan alasan wajib; tulis `audit_logs` sebelum/sesudah; tampilkan riwayat perubahan di halaman attempt.
   - Selesai bila: mengosongkan alasan membuat tombol simpan nonaktif.
 
-- [ ] **T6.5: Reset attempt (GRD-04)** `P1` `S`
+- [x] **T6.5: Reset attempt (GRD-04)** `P1` `S`
   - Cakupan: sambungkan modal reset di monitor ke `resetAttempt` mode `delete`/`extra`; konfirmasi + `audit_logs`.
   - Selesai bila: setelah reset, peserta bisa memulai lagi dan kuota bertambah pada mode `extra`.
 
-- [ ] **T6.6: Rilis nilai manual (GRD-05)** `P1` `S`
+- [x] **T6.6: Rilis nilai manual (GRD-05)** `P1` `S`
   - Cakupan: tombol Rilis nilai pada ujian dengan `result_release = manual`; isi `results_released_at`; status terlihat di ringkasan ujian.
   - Selesai bila: peserta melihat skor hanya setelah rilis.
 
@@ -743,11 +754,21 @@ Ini fase yang menutup tiga pelanggaran prinsip. Kerjakan berurutan.
   - Cakupan: `GET /api/export/results?examId=&format=` memakai SheetJS untuk XLSX; ganti `toast("Ekspor XLSX disiapkan")`; sertakan filter aktif.
   - Selesai bila: file XLSX terbuka di LibreOffice dengan kolom sesuai RPT-01.
 
+
+**Hasil Fase 6 (7 November 2026):** halaman penilaian, monitor, dan rekap membaca attempt nyata; `grade_essay` memindahkan attempt ke `graded` hanya setelah semua esai dinilai; `reset_attempt` dan `release_results` terhubung ke UI (teruji di `scripts/test-participant-flow.cjs`).
+
+Yang **belum** selesai dan sengaja tidak dicentang:
+- **T6.4:** `overrideScore` dengan alasan wajib + riwayat audit belum ada.
+- **T6.7:** data sudah nyata, tetapi paginasi/cari/urut/filter belum disimpan di query string.
+- **T6.8:** rata-rata, median, tertinggi, terendah, % lulus sudah dari data nyata; histogram masih batang CSS, belum Recharts.
+- **T6.9:** analisis butir soal belum ada.
+- **T6.10:** ekspor CSV/XLSX sudah berfungsi di peramban (SheetJS dimuat saat diklik), tetapi belum lewat Route Handler `GET /api/export/results`.
+
 ---
 
 ## Fase 7: Dashboard, monitoring, sistem (M4)
 
-- [ ] **T7.1: Dashboard dari agregasi nyata (DSH-01)** `P0` `M`
+- [x] **T7.1: Dashboard dari agregasi nyata (DSH-01)** `P0` `M`
   - Cakupan: ujian aktif + mendatang, jumlah sedang mengerjakan, attempt hari ini, jawaban perlu dinilai, daftar ujian terbaru; sapa nama admin dari sesi.
   - Selesai bila: tidak ada lagi `examSummary()` dari `admin-data.ts`.
 
@@ -783,6 +804,11 @@ Ini fase yang menutup tiga pelanggaran prinsip. Kerjakan berurutan.
 - [ ] **T7.7: Keadaan kosong dan skeleton (§9.5)** `P1` `M`
   - Cakupan: "Kode tidak ditemukan", "Belum ada ujian + Buat ujian pertama", "Belum ada yang mengerjakan. Bagikan kode ABC123…", skeleton pada `loading.tsx` untuk tiap rute berat, error + Coba lagi.
   - Selesai bila: setiap rute punya tampilan yang layak saat data kosong dan saat memuat.
+
+
+**Hasil Fase 7 (7 November 2026):** dashboard memakai `getAdminOverview` + `getExamStatusCounts`; nol berarti nol, tanpa `examSummary()` dari `admin-data.ts`. Monitor membaca `listAttempts` dan menyegarkan lewat `router.refresh()` tiap 10 detik.
+
+Yang **belum**: **T7.2** belum memakai TanStack Query `refetchInterval`; penyegaran berjalan dengan interval biasa dan tetap menyegarkan saat tab tidak aktif.
 
 ---
 
@@ -886,3 +912,14 @@ Urutan yang disarankan: Fase 0 → 1 → 2 → 3 → 4 (paralel dengan 5.1–5.5
 - Jangan menambah fitur di luar PRD §1.4. Kalau muncul ide baru, tulis di bagian backlog, jangan langsung dibuat.
 - Setiap task diakhiri `tsc --noEmit` + `eslint` bersih; jangan menumpuk error antar task.
 - Jangan hapus data demo sebelum penggantinya berfungsi, kecuali task T5.15 yang memang menuntut penghapusan.
+
+---
+
+## Pembersihan data contoh (7 November 2026)
+
+Sub-goal “sekarang hapus placeholder” diselesaikan dengan menghapus sumber data karangan, bukan menyembunyikannya:
+
+- Dihapus: `src/lib/mock-data.ts`, `src/lib/admin-data.ts`, `src/lib/participant-identity.ts`, dan komponen `SampleDataNote`. `src/lib/types.ts` sekarang hanya berisi enum; model `Exam`/`Question`/`Attempt`/`ResultSummary` yang sudah basi dihapus karena menyatakan kolom wajib padahal di database boleh `NULL` (mis. `passing_score`).
+- Semua halaman admin yang dulu membaca data contoh — dashboard, soal, monitor, rekap, penilaian, pengaturan — sekarang Server Component yang membaca database lewat modul fitur, dengan keadaan kosong yang jujur.
+- Wizard “Buat ujian” benar-benar menyimpan (`createExamDraft` → `saveExamQuestions`); tombol ekspor rekap benar-benar membuat CSV/XLSX; tombol rilis hasil benar-benar mengisi `results_released_at`.
+- Verifikasi: `scripts/test-admin-pages.cjs` (22/22) dan `scripts/test-participant-flow.cjs` (23/23). Setelah uji, database kembali bersih: 22 ujian (20 draft + 2 published), 505 soal, 1950 opsi, 0 attempt, tanpa sisa kode `UJI%`/`DEMO%`.

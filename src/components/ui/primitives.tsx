@@ -1,5 +1,4 @@
 import { cn } from "@/lib/utils";
-import { Database } from "lucide-react";
 import Image from "next/image";
 
 /*
@@ -134,26 +133,3 @@ export function EmptyState({
   );
 }
 
-/*
- * Penanda kejujuran data (DESIGN.md §9). Semua angka di panel admin berasal dari
- * data contoh, jadi layar yang menampilkannya harus mengatakannya.
- */
-export function SampleDataNote({
-  children = "Angka di halaman ini berasal dari data contoh, bukan hasil ujian sungguhan.",
-  className,
-}: {
-  children?: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <p
-      className={cn(
-        "flex items-start gap-1.5 rounded-field border border-line bg-line-soft px-2.5 py-1.5 text-[12px] leading-snug text-muted",
-        className,
-      )}
-    >
-      <Database className="mt-px size-3.5 shrink-0 text-navy-600" aria-hidden />
-      <span>{children}</span>
-    </p>
-  );
-}

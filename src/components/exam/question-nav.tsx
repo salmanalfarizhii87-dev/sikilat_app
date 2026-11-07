@@ -1,16 +1,31 @@
-"use client";
+﻿"use client";
 
 import { cn } from "@/lib/utils";
 import { Flag, Lock } from "lucide-react";
-import type { Attempt, Question } from "@/lib/types";
+import type { QuestionType } from "@/lib/types";
 
 export type NavFilter = "all" | "answered" | "empty" | "flagged";
 
+/**
+ * Jawaban minimal yang dibutuhkan navigasi soal.
+ *
+ * Sengaja bukan tipe `Attempt` penuh: grid ini hanya perlu tahu apakah soal
+ * sudah terjawab dan apakah ditandai ragu. Menerima seluruh attempt akan
+ * membuatnya ikut berubah setiap kali bentuk attempt berubah, padahal
+ * kebutuhannya tidak.
+ */
+export interface NavAnswer {
+  selectedOptionIds: string[];
+  essayText: string;
+  flagged: boolean;
+  touched?: boolean;
+}
+
 export function questionState(
-  question: Question,
-  attempt: Attempt | null,
+  question: { id: string; type: QuestionType },
+  answers: Record<string, NavAnswer | undefined> | null | undefined,
 ): { answered: boolean; flagged: boolean } {
-  const ans = attempt?.answers[question.id];
+  const ans = answers?.[question.id];
   const answered =
     !!ans &&
     (question.type === "essay"
@@ -23,26 +38,26 @@ export function questionState(
 
 /**
  * Kotak nomor soal. 44 px ke atas supaya tetap nyaman ditekan di HP
- * (PRD §9.1). Status tidak dibedakan hanya dengan warna: soal terisi memakai
+ * (PRD Â§9.1). Status tidak dibedakan hanya dengan warna: soal terisi memakai
  * isi amber, soal ragu membawa ikon bendera.
  */
 export function QuestionGrid({
   questions,
-  attempt,
+  answers,
   currentId,
   onJump,
   filter = "all",
   dense,
 }: {
-  questions: Question[];
-  attempt: Attempt | null;
+  questions: { id: string; type: QuestionType }[];
+  answers: Record<string, NavAnswer | undefined> | null | undefined;
   currentId?: string;
   onJump: (id: string) => void;
   filter?: NavFilter;
   dense?: boolean;
 }) {
   const visible = questions.filter((q) => {
-    const state = questionState(q, attempt);
+    const state = questionState(q, answers);
     if (filter === "answered") return state.answered;
     if (filter === "empty") return !state.answered;
     if (filter === "flagged") return state.flagged;
@@ -60,7 +75,7 @@ export function QuestionGrid({
   return (
     <div className={cn("grid gap-2", dense ? "grid-cols-6 sm:grid-cols-8" : "grid-cols-5 sm:grid-cols-6")}>
       {visible.map((q) => {
-        const state = questionState(q, attempt);
+        const state = questionState(q, answers);
         const isCurrent = q.id === currentId;
         const number = questions.findIndex((x) => x.id === q.id) + 1;
         return (

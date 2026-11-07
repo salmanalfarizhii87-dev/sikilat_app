@@ -563,6 +563,10 @@ export type Database = {
         }
         Returns: Json
       }
+      save_exam_questions: {
+        Args: { p_exam_id: string; p_questions: Json }
+        Returns: Json
+      }
       start_attempt: {
         Args: {
           p_class: string

@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import * as React from "react";
 import Link from "next/link";
@@ -11,27 +11,28 @@ import {
   CheckCircle2,
   ClipboardList,
   CloudCheck,
-  Copy,
   FileText,
   Info,
   ListChecks,
+  Loader2,
   Save,
   Settings2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn, formatDuration } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Checkbox, Switch } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/checkbox";
 import { Field, Input, Select, Textarea } from "@/components/ui/field";
 import { Badge } from "@/components/ui/primitives";
-import { PageHeader, Panel } from "@/components/admin/ui";
+import { ExamLinkRow, PageHeader, Panel } from "@/components/admin/ui";
 import {
   QuestionEditor,
-  questionFromModel,
+  questionToPayload,
   type DraftQuestion,
 } from "@/components/admin/question-editor";
-import { demoExam, demoQuestions } from "@/lib/mock-data";
-import { useMounted, useOriginLabel } from "@/lib/client-hooks";
+import { createExamDraft } from "@/features/exams/actions";
+import { saveExamQuestions } from "@/features/questions/actions";
+import { useMounted } from "@/lib/client-hooks";
 
 const DRAFT_KEY = "kilat_exam_draft_v1";
 
@@ -50,7 +51,8 @@ interface Draft {
   questions: DraftQuestion[];
   durationMinutes: number;
   maxAttempts: number;
-  passingScore: number;
+  /** String supaya bisa dikosongkan; kosong = tanpa KKM (bukan 0). */
+  passingScore: string;
   askClass: boolean;
   shuffleQuestions: boolean;
   shuffleOptions: boolean;
@@ -72,7 +74,7 @@ function initialDraft(): Draft {
     questions: [],
     durationMinutes: 60,
     maxAttempts: 1,
-    passingScore: 70,
+    passingScore: "70",
     askClass: true,
     shuffleQuestions: false,
     shuffleOptions: false,
@@ -109,11 +111,10 @@ export default function NewExamWizardPage() {
   const [step, setStep] = React.useState(() => restored?.step ?? 0);
   const [draft, setDraft] = React.useState<Draft>(() => restored?.draft ?? initialDraft());
   const [savedAt, setSavedAt] = React.useState<string | null>(restored ? "sebelumnya" : null);
-  const [finished, setFinished] = React.useState(false);
   const [showIssues, setShowIssues] = React.useState(false);
 
   React.useEffect(() => {
-    if (!mounted || finished) return;
+    if (!mounted) return;
     const timer = window.setTimeout(() => {
       try {
         window.localStorage.setItem(DRAFT_KEY, JSON.stringify({ draft, step }));
@@ -129,13 +130,15 @@ export default function NewExamWizardPage() {
       }
     }, 600);
     return () => window.clearTimeout(timer);
-  }, [draft, step, mounted, finished]);
+  }, [draft, step, mounted]);
 
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) =>
     setDraft((prev) => ({ ...prev, [key]: value }));
 
   const totalPoints = draft.questions.reduce((sum, q) => sum + q.points, 0);
   const essays = draft.questions.filter((q) => q.type === "essay").length;
+  /** `null` = tanpa KKM. Ditampilkan apa adanya, bukan sebagai "KKM 0". */
+  const kkmLabel = draft.passingScore.trim() === "" ? "Tanpa KKM" : `KKM ${draft.passingScore}`;
 
   const issues = React.useMemo(() => {
     const list: { message: string; step: number }[] = [];
@@ -149,13 +152,22 @@ export default function NewExamWizardPage() {
       if (q.type !== "essay") {
         if (q.options.length < 2)
           list.push({ message: `Soal ${i + 1}: minimal 2 opsi jawaban.`, step: 1 });
+        if (q.options.some((option) => !option.body.trim()))
+          list.push({ message: `Soal ${i + 1}: ada opsi yang masih kosong.`, step: 1 });
         if (q.correct.length === 0)
           list.push({ message: `Soal ${i + 1}: belum ada kunci jawaban.`, step: 1 });
+        // Peserta hanya bisa memilih satu opsi pada tipe ini, jadi dua kunci
+        // membuat soal itu mustahil dijawab benar.
+        if (q.type === "mcq_single" && q.correct.length > 1)
+          list.push({ message: `Soal ${i + 1}: pilihan ganda satu jawaban hanya boleh satu kunci.`, step: 1 });
       }
     });
     if (draft.durationMinutes < 5) list.push({ message: "Durasi minimal 5 menit.", step: 2 });
-    if (draft.passingScore < 0 || draft.passingScore > 100)
-      list.push({ message: "KKM harus di antara 0 dan 100.", step: 2 });
+    if (draft.passingScore.trim() !== "") {
+      const kkm = Number(draft.passingScore);
+      if (!Number.isFinite(kkm) || kkm < 0 || kkm > 100)
+        list.push({ message: "KKM harus di antara 0 dan 100, atau dikosongkan.", step: 2 });
+    }
     if (draft.openMode === "scheduled" && (!draft.opensAt || !draft.closesAt))
       list.push({ message: "Jadwal buka dan tutup wajib diisi.", step: 2 });
     if (
@@ -184,32 +196,89 @@ export default function NewExamWizardPage() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  const finish = () => {
+  const [saving, setSaving] = React.useState(false);
+  const [created, setCreated] = React.useState<{ examId: string; code: string } | null>(null);
+
+  /**
+   * Simpan draft ke server: buat ujian, lalu tulis seluruh soalnya.
+   *
+   * Dua langkah, dan urutannya tidak bisa dibalik: soal butuh `exam_id`, dan
+   * `exam_id` baru ada setelah ujian dibuat. Kalau langkah kedua gagal, ujian
+   * sudah terlanjur ada sebagai draft kosong â€” karena itu pesan galatnya
+   * menyebut ID-nya supaya admin bisa membuka dan mengisi ulang, bukan
+   * mengira tidak ada yang tersimpan.
+   *
+   * Status tetap `draft`: wizard ini tidak menerbitkan ujian. EXM-08 mensyaratkan
+   * pemeriksaan kelayakan sebelum terbit, dan jalur itu ada di tombol
+   * "Aktifkan" pada halaman ringkasan ujian.
+   */
+  const finish = async () => {
     if (issues.length > 0) {
       setShowIssues(true);
       toast.error("Masih ada yang perlu diperbaiki.");
       return;
     }
-    setFinished(true);
+
+    setSaving(true);
+
+    const passing = draft.passingScore.trim() === "" ? null : Number(draft.passingScore);
+
+    const created_ = await createExamDraft({
+      title: draft.title,
+      subjectLabel: draft.subject,
+      description: draft.description,
+      instructions: draft.instructions,
+      opensAt: draft.openMode === "scheduled" ? draft.opensAt : "",
+      closesAt: draft.openMode === "scheduled" ? draft.closesAt : "",
+      durationMinutes: draft.durationMinutes,
+      maxAttempts: draft.maxAttempts,
+      scorePolicy: draft.scorePolicy,
+      passingScore: passing,
+      shuffleQuestions: draft.shuffleQuestions,
+      shuffleOptions: draft.shuffleOptions,
+      askClass: draft.askClass,
+      resultVisibility: draft.resultVisibility,
+      resultRelease: draft.resultRelease,
+    });
+
+    if (!created_.ok) {
+      setSaving(false);
+      toast.error(created_.error.message);
+      return;
+    }
+
+    const saved = await saveExamQuestions(
+      created_.data.examId,
+      draft.questions.map(questionToPayload),
+    );
+
+    setSaving(false);
+
+    if (!saved.ok) {
+      toast.error(
+        `Ujian tersimpan sebagai draft, tetapi soalnya gagal disimpan: ${saved.error.message}`,
+      );
+      router.push(`/admin/exams/${created_.data.examId}/questions`);
+      return;
+    }
+
     try {
       window.localStorage.removeItem(DRAFT_KEY);
     } catch {
-      // noop
+      // noop â€” draft lokal hanya kenyamanan, bukan sumber data
     }
+
+    setCreated(created_.data);
   };
 
-  if (finished) {
+  if (created) {
     return (
       <DraftDone
         title={draft.title}
         questionCount={draft.questions.length}
         totalPoints={totalPoints}
-        onReset={() => {
-          setFinished(false);
-          setDraft(initialDraft());
-          setStep(0);
-          router.push("/admin/exams");
-        }}
+        examId={created.examId}
+        code={created.code}
       />
     );
   }
@@ -236,14 +305,14 @@ export default function NewExamWizardPage() {
     <>
       <PageHeader
         title={draft.title.trim() || "Ujian baru"}
-        description="Draft tersimpan otomatis di perangkat ini. Kamu bisa berhenti lalu melanjutkan kapan saja."
+        description="Draft tersimpan otomatis di perangkat ini sampai kamu menekan Simpan. Setelah tersimpan, datanya ada di server dan bisa dibuka dari perangkat lain."
         actions={
           <span className="inline-flex items-center gap-1.5 rounded-full border border-leaf-200 bg-leaf-50 px-2.5 py-1 font-heading text-[11.5px] font-semibold text-leaf-800">
             <CloudCheck className="size-3.5" aria-hidden />
             {savedAt
               ? savedAt === "sebelumnya"
-                ? "Draft dipulihkan"
-                : `Tersimpan ${savedAt} WIB`
+                ? "Draft lokal dipulihkan"
+                : `Draft lokal ${savedAt} WIB`
               : "Menyimpan"}
           </span>
         }
@@ -328,7 +397,6 @@ export default function NewExamWizardPage() {
                 <Textarea
                   value={draft.description}
                   onChange={(e) => set("description", e.target.value)}
-                  placeholder="Ujian untuk mengukur pemahaman bab aljabar dan perbandingan."
                   className="min-h-20"
                 />
               </Field>
@@ -357,7 +425,7 @@ export default function NewExamWizardPage() {
                     formatDuration(draft.durationMinutes * 60),
                     `${draft.questions.length} soal`,
                     `${totalPoints} poin`,
-                    `KKM ${draft.passingScore}`,
+                    kkmLabel,
                   ].map((chip) => (
                     <span
                       key={chip}
@@ -374,35 +442,22 @@ export default function NewExamWizardPage() {
               </p>
             </Panel>
 
-            <Panel title="Mulai cepat">
-              <button
-                type="button"
-                onClick={() => {
-                  setDraft((prev) => ({
-                    ...prev,
-                    title: "Ulangan Harian Matematika",
-                    subject: "Matematika, Kelas 7",
-                    description:
-                      "Ulangan singkat untuk mengukur pemahaman operasi bilangan dan aljabar dasar.",
-                    questions: demoQuestions.slice(0, 10).map(questionFromModel),
-                  }));
-                  toast.success("Sepuluh soal contoh dimuat");
-                }}
-                className="press flex w-full items-center gap-3 rounded-field border border-line bg-surface px-3 py-2.5 text-left hover:bg-line-soft"
-              >
-                <span className="grid size-8 shrink-0 place-items-center rounded-field bg-line-soft text-navy-700">
-                  <ListChecks className="size-4" aria-hidden />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block font-heading text-[12.5px] font-bold text-ink">
-                    Isi 10 soal contoh
-                  </span>
-                  <span className="block text-[11.5px] text-muted">
-                    Untuk mencoba alur wizard lebih cepat
-                  </span>
-                </span>
-                <ArrowRight className="size-3.5 shrink-0 text-muted" aria-hidden />
-              </button>
+            <Panel title="Setelah disimpan">
+              <ul className="space-y-2 text-[12px] leading-relaxed text-muted">
+                <li className="flex items-start gap-1.5">
+                  <Check className="mt-0.5 size-3.5 shrink-0 text-leaf-700" aria-hidden />
+                  Ujian tersimpan sebagai <strong className="font-semibold text-ink-soft">draft</strong>{" "}
+                  dengan kode unik yang dibuat server.
+                </li>
+                <li className="flex items-start gap-1.5">
+                  <Check className="mt-0.5 size-3.5 shrink-0 text-leaf-700" aria-hidden />
+                  Draft tidak bisa diakses peserta sampai kamu menekan Aktifkan di halaman ringkasan.
+                </li>
+                <li className="flex items-start gap-1.5">
+                  <Check className="mt-0.5 size-3.5 shrink-0 text-leaf-700" aria-hidden />
+                  Soal masih bisa diubah sampai peserta pertama mulai mengerjakan.
+                </li>
+              </ul>
             </Panel>
           </div>
         </div>
@@ -503,13 +558,14 @@ export default function NewExamWizardPage() {
             <Panel title="Penilaian dan hasil">
               <div className="space-y-3.5">
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <Field label="KKM (nilai minimum lulus)">
+                  <Field label="KKM (nilai minimum lulus)" hint="Kosongkan bila tanpa KKM">
                     <Input
                       type="number"
                       min={0}
                       max={100}
                       value={draft.passingScore}
-                      onChange={(e) => set("passingScore", Number(e.target.value) || 0)}
+                      placeholder="Tanpa KKM"
+                      onChange={(e) => set("passingScore", e.target.value)}
                     />
                   </Field>
                   <Field label="Bila percobaan lebih dari satu">
@@ -586,7 +642,7 @@ export default function NewExamWizardPage() {
                   ["Soal esai", `${essays} soal`],
                   ["Total poin", `${totalPoints} poin`],
                   ["Maks percobaan", `${draft.maxAttempts} kali`],
-                  ["KKM", String(draft.passingScore)],
+                  ["KKM", kkmLabel],
                 ].map(([label, value]) => (
                   <div key={label} className="flex items-center justify-between gap-2">
                     <dt className="text-muted">{label}</dt>
@@ -616,7 +672,7 @@ export default function NewExamWizardPage() {
                     `${totalPoints} poin`,
                     formatDuration(draft.durationMinutes * 60),
                     draft.openMode === "manual" ? "Buka manual" : "Terjadwal",
-                    `KKM ${draft.passingScore}`,
+                    kkmLabel,
                   ].map((chip) => (
                     <span
                       key={chip}
@@ -691,7 +747,7 @@ export default function NewExamWizardPage() {
                           : q.type === "mcq_multiple"
                             ? `PG banyak, ${q.correct.length} kunci`
                             : "PG"}{" "}
-                        · {q.points} poin
+                        Â· {q.points} poin
                       </p>
                     </div>
                     {q.correct.length === 0 && q.type !== "essay" && (
@@ -756,30 +812,34 @@ export default function NewExamWizardPage() {
             </Panel>
 
             <Panel title="Sebelum menyimpan">
-              <Checkbox
-                checked
-                onChange={() => undefined}
-                label="Soal tidak bisa diubah setelah ada peserta"
-                description="Pastikan isi soal dan kunci sudah benar. Pengaturan waktu masih bisa diubah nanti."
-              />
+              <ul className="space-y-2 text-[12px] leading-relaxed text-muted">
+                <li className="flex items-start gap-1.5">
+                  <Check className="mt-0.5 size-3.5 shrink-0 text-leaf-700" aria-hidden />
+                  Ujian disimpan sebagai draft, belum diterbitkan.
+                </li>
+                <li className="flex items-start gap-1.5">
+                  <Check className="mt-0.5 size-3.5 shrink-0 text-leaf-700" aria-hidden />
+                  Soal tidak bisa diubah lagi setelah ada peserta yang mulai mengerjakan.
+                </li>
+                <li className="flex items-start gap-1.5">
+                  <Check className="mt-0.5 size-3.5 shrink-0 text-leaf-700" aria-hidden />
+                  Pastikan kunci jawaban sudah benar — nilai dihitung dari kunci ini.
+                </li>
+              </ul>
             </Panel>
 
             <div className="rounded-card border border-line bg-surface p-4">
-              <Button block size="lg" onClick={finish}>
-                <Save className="size-4" aria-hidden /> Simpan draft lengkap
-              </Button>
-              <Button
-                block
-                size="md"
-                variant="ghost"
-                className="mt-1.5"
-                onClick={() => toast("Draft sudah tersimpan di perangkat ini.")}
-              >
-                Simpan dan keluar
+              <Button block size="lg" onClick={finish} disabled={saving}>
+                {saving ? (
+                  <Loader2 className="size-4 animate-spin" aria-hidden />
+                ) : (
+                  <Save className="size-4" aria-hidden />
+                )}
+                {saving ? "Menyimpan ke server…" : "Simpan draft ke server"}
               </Button>
               <p className="mt-2 text-[11.5px] leading-relaxed text-muted">
-                Aplikasi ini belum punya server penyimpanan, jadi ujian tidak bisa benar-benar
-                diterbitkan. Yang tersimpan hanya draft di perangkat ini.
+                Ujian dan seluruh soalnya disimpan ke database dalam satu kali simpan. Kode ujian
+                dibuat otomatis oleh server dan ditampilkan setelah berhasil.
               </p>
             </div>
           </div>
@@ -829,8 +889,13 @@ export default function NewExamWizardPage() {
               Lanjut <ArrowRight className="size-4" aria-hidden />
             </Button>
           ) : (
-            <Button size="md" onClick={finish}>
-              <Save className="size-4" aria-hidden /> Simpan draft
+            <Button size="md" onClick={finish} disabled={saving}>
+              {saving ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden />
+              ) : (
+                <Save className="size-4" aria-hidden />
+              )}
+              {saving ? "Menyimpan…" : "Simpan draft"}
             </Button>
           )}
         </div>
@@ -840,23 +905,26 @@ export default function NewExamWizardPage() {
 }
 
 /**
- * Keadaan akhir wizard. Tidak mengklaim ujian terbit: tanpa server, tidak ada
- * yang bisa diterbitkan. Yang ditawarkan hanya langkah berikutnya yang nyata.
+ * Keadaan akhir wizard.
+ *
+ * Menampilkan kode ujian yang **baru saja dibuat server**, bukan kode ujian
+ * contoh. Tautan `/u/<kode>` sudah nyata, tetapi draft belum bisa diakses
+ * peserta — jadi tombolnya mengarah ke halaman ringkasan ujian, bukan ke
+ * halaman peserta yang pasti menampilkan "kode tidak ditemukan".
  */
 function DraftDone({
   title,
   questionCount,
   totalPoints,
-  onReset,
+  examId,
+  code,
 }: {
   title: string;
   questionCount: number;
   totalPoints: number;
-  onReset: () => void;
+  examId: string;
+  code: string;
 }) {
-  const origin = useOriginLabel();
-  const demoUrl = `https://${origin}/u/${demoExam.code}`;
-
   return (
     <div className="mx-auto max-w-xl">
       <div className="animate-rise rounded-card border border-line bg-surface p-5 sm:p-7">
@@ -864,53 +932,40 @@ function DraftDone({
           <CheckCircle2 className="size-6" aria-hidden />
         </span>
         <h1 className="mt-3 font-heading text-[22px] font-extrabold leading-tight text-ink">
-          Draft ujian sudah lengkap
+          Draft ujian tersimpan
         </h1>
         <p className="mt-1.5 text-[13.5px] leading-relaxed text-muted">
           <strong className="font-semibold text-ink">{title || "Ujian baru"}</strong> berisi{" "}
-          {questionCount} soal dan {totalPoints} poin. Semua isian sudah lolos pemeriksaan.
+          {questionCount} soal dan {totalPoints} poin, tersimpan di server sebagai draft.
         </p>
 
-        <div className="mt-4 rounded-field border border-accent-200 bg-accent-50 px-3 py-2.5">
+        <div className="mt-4 rounded-field border border-line bg-canvas px-3 py-2.5">
+          <p className="text-[11.5px] font-medium text-muted">Kode ujian</p>
+          <p className="font-heading text-[22px] font-extrabold tracking-wide text-ink">{code}</p>
+        </div>
+
+        <p className="mt-4 text-[12px] font-medium text-muted">Tautan peserta</p>
+        <div className="mt-1.5">
+          <ExamLinkRow code={code} />
+        </div>
+
+        <div className="mt-3 rounded-field border border-accent-200 bg-accent-50 px-3 py-2.5">
           <p className="text-[12.5px] leading-relaxed text-accent-900">
-            <strong className="font-semibold">Ujian belum diterbitkan.</strong> Aplikasi ini belum
-            tersambung ke server, jadi belum ada kode ujian dan belum ada peserta yang bisa masuk ke
-            ujian ini.
+            <strong className="font-semibold">Belum bisa diakses peserta.</strong> Ujian masih
+            berstatus draft. Aktifkan dari halaman ringkasan setelah kamu memeriksa soal dan
+            jadwalnya.
           </p>
         </div>
 
-        <p className="mt-4 text-[12.5px] leading-relaxed text-muted">
-          Sambil menunggu backend, kamu bisa mencoba alur peserta memakai ujian contoh yang sudah
-          tersedia.
-        </p>
-
-        <div className="mt-2.5 flex items-center gap-2 rounded-field border border-line bg-canvas px-3 py-2">
-          <code className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-ink-soft">
-            {demoUrl}
-          </code>
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={async () => {
-              try {
-                await navigator.clipboard.writeText(demoUrl);
-                toast.success("Tautan ujian contoh disalin");
-              } catch {
-                toast.error("Gagal menyalin. Salin manual dari kotak di atas.");
-              }
-            }}
-          >
-            <Copy className="size-3.5" aria-hidden /> Salin
-          </Button>
-        </div>
-
         <div className="mt-4 grid gap-2 sm:grid-cols-2">
-          <Button variant="secondary" onClick={onReset}>
-            <ArrowLeft className="size-4" aria-hidden /> Kembali ke daftar
-          </Button>
-          <Link href={`/u/${demoExam.code}`} target="_blank" rel="noreferrer">
+          <Link href="/admin/exams">
+            <Button block variant="secondary">
+              <ArrowLeft className="size-4" aria-hidden /> Daftar ujian
+            </Button>
+          </Link>
+          <Link href={`/admin/exams/${examId}`}>
             <Button block>
-              Buka ujian contoh <ArrowRight className="size-4" aria-hidden />
+              Buka ringkasan ujian <ArrowRight className="size-4" aria-hidden />
             </Button>
           </Link>
         </div>

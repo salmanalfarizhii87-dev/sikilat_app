@@ -1,103 +1,115 @@
-"use client";
-
-import * as React from "react";
-import { Download, Info, Lock, Save } from "lucide-react";
-import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
-import { PageHeader, Panel } from "@/components/admin/ui";
+import type { Metadata } from "next";
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import { ArrowLeft, Info, Lock } from "lucide-react";
+import { PageHeader, StatusBadge } from "@/components/admin/ui";
 import { ExamTabs } from "@/components/admin/exam-tabs";
-import {
-  QuestionEditor,
-  questionFromModel,
-  type DraftQuestion,
-} from "@/components/admin/question-editor";
-import { demoExam, demoQuestions } from "@/lib/mock-data";
+import { getExam, examHasAttempts } from "@/features/exams/queries";
+import { getExamQuestions } from "@/features/questions/queries";
+import { ExamDetailActions } from "../exam-detail-actions";
+import { ExamQuestionsEditor } from "./editor-client";
 
-export default function ExamQuestionsPage({ params }: PageProps<"/admin/exams/[id]">) {
-  const { id } = React.use(params);
-  const [questions, setQuestions] = React.useState<DraftQuestion[]>(() =>
-    demoQuestions.map(questionFromModel),
-  );
-  const [dirty, setDirty] = React.useState(false);
+/**
+ * Editor soal ujian (T3.9, T4.2).
+ *
+ * Sebelumnya halaman ini komponen klien yang mengisi dirinya dari
+ * `demoQuestions` dan menulis `const locked = true`, lalu tombol simpannya
+ * hanya memunculkan toast "belum tersambung ke server". Akibatnya: membuka
+ * paket bank soal menampilkan 20 soal contoh, dan setiap ujian tampak terkunci
+ * meski belum pernah dikerjakan.
+ *
+ * Sekarang `locked` dihitung dari `examHasAttempts` — EXM-09 menyatakan isi soal
+ * terkunci **setelah** percobaan pertama, bukan selamanya.
+ */
+export const metadata: Metadata = { title: "Soal ujian" };
 
-  const totalPoints = questions.reduce((sum, q) => sum + q.points, 0);
-  const locked = true;
+export default async function ExamQuestionsPage({
+  params,
+}: PageProps<"/admin/exams/[id]/questions">) {
+  const { id } = await params;
 
-  /* Templat CSV dibuat di perangkat ini, jadi unduhannya benar-benar terjadi. */
-  const downloadTemplate = () => {
-    const csv = `tipe,soal,opsi_a,opsi_b,opsi_c,opsi_d,opsi_e,kunci,poin,pembahasan
-pg,"Hasil dari 7 x 8 adalah ...",54,56,58,64,,B,1,"7 x 8 = 56"
-pg_banyak,"Manakah yang termasuk bilangan prima?",2,4,5,9,,A|C,2,"2 dan 5 hanya habis dibagi 1 dan dirinya sendiri"
-essay,"Jelaskan pengertian fotosintesis dengan kata-katamu sendiri.",,,,,,"Proses tumbuhan membuat makanan dengan bantuan cahaya matahari",5,`;
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "templat-soal-sikilat.csv";
-    a.click();
-    URL.revokeObjectURL(url);
-    toast.success("Templat CSV diunduh");
-  };
+  const exam = await getExam(id);
+  if (!exam) notFound();
+
+  const [questions, hasAttempts] = await Promise.all([
+    getExamQuestions(exam.id),
+    examHasAttempts(exam.id),
+  ]);
+
+  const list = questions ?? [];
+  const imageCount = list.filter(
+    (question) => question.mediaPath || question.options.some((option) => option.mediaPath),
+  ).length;
 
   return (
     <>
       <PageHeader
-        title="Editor soal"
-        description={`${questions.length} soal, ${totalPoints} poin. Soal terkunci karena sudah ada peserta yang mengerjakan.`}
+        title="Soal ujian"
+        description={
+          hasAttempts
+            ? "Soal terkunci karena ujian ini sudah punya percobaan. Isi soal tidak bisa diubah lagi."
+            : "Tambah, ubah, dan urutkan soal. Simpan sekaligus — semua perubahan masuk dalam satu transaksi."
+        }
         actions={
-          <>
-            <Button variant="secondary" size="md" onClick={downloadTemplate}>
-              <Download className="size-4" aria-hidden /> Templat CSV
-            </Button>
-            <Button
-              size="md"
-              disabled={!dirty}
-              onClick={() => {
-                setDirty(false);
-                toast("Belum tersambung ke server. Perubahan soal tidak tersimpan permanen.");
-              }}
-            >
-              <Save className="size-4" aria-hidden /> Simpan
-            </Button>
-          </>
+          <ExamDetailActions
+            examId={exam.id}
+            code={exam.code}
+            title={exam.title}
+            status={exam.status}
+            phase={exam.status === "archived" ? "archived" : exam.status === "draft" ? "draft" : "open"}
+            hasAttempts={hasAttempts}
+          />
         }
       >
-        <p className="mt-2 text-[12.5px] text-muted">
-          {demoExam.subjectLabel} · {demoExam.code}
+        <p className="mt-2 flex flex-wrap items-center gap-2 text-[12.5px] text-muted">
+          <StatusBadge status={exam.status} />
+          <span className="rounded-xs bg-line-soft px-1.5 py-0.5 font-heading text-[11px] font-bold text-ink-soft">
+            {exam.code}
+          </span>
+          {exam.subjectLabel && <span>{exam.subjectLabel}</span>}
         </p>
       </PageHeader>
 
-      <ExamTabs examId={id} />
+      <ExamTabs examId={exam.id} />
 
-      <div className="mb-3 flex flex-wrap items-start gap-2 rounded-field border border-accent-200 bg-accent-50 px-3 py-2">
-        <Lock className="mt-0.5 size-3.5 shrink-0 text-accent-900" aria-hidden />
-        <p className="min-w-0 flex-1 text-[12px] leading-relaxed text-accent-900">
-          <strong className="font-semibold">Soal dan opsi hanya-baca.</strong> Setelah percobaan
-          pertama masuk, isi soal tidak bisa diubah agar penilaian tetap adil. Buat ujian baru bila
-          perlu revisi besar.
-        </p>
-      </div>
+      {hasAttempts ? (
+        <div className="mb-3 flex flex-wrap items-start gap-2 rounded-field border border-accent-200 bg-accent-50 px-3 py-2">
+          <Lock className="mt-0.5 size-3.5 shrink-0 text-accent-900" aria-hidden />
+          <p className="min-w-0 flex-1 text-[12px] leading-relaxed text-accent-900">
+            <strong className="font-semibold">Soal dan opsi hanya-baca.</strong> Setelah percobaan
+            pertama masuk, isi soal tidak bisa diubah agar penilaian tetap adil. Pengaturan ujian —
+            durasi, KKM, cara hasil dirilis — masih bisa diubah di tab Pengaturan. Buat ujian baru
+            bila perlu revisi besar.
+          </p>
+        </div>
+      ) : (
+        <div className="mb-3 flex flex-wrap items-start gap-2 rounded-field border border-line bg-canvas px-3 py-2">
+          <Info className="mt-0.5 size-3.5 shrink-0 text-navy-600" aria-hidden />
+          <p className="min-w-0 flex-1 text-[12px] leading-relaxed text-muted">
+            Soal bisa disunting sampai peserta pertama mulai mengerjakan.{" "}
+            {imageCount > 0 && (
+              <>
+                {imageCount} soal punya gambar; gambarnya dipertahankan saat kamu menyimpan.{" "}
+              </>
+            )}
+            Mengubah urutan di sini juga mengubah urutan yang dilihat peserta (kecuali ujian
+            memakai pengaturan acak).
+          </p>
+        </div>
+      )}
 
-      <QuestionEditor
-        questions={questions}
-        onChange={(next) => {
-          setQuestions(next);
-          setDirty(true);
-        }}
-        locked={locked}
-        emptyLabel="Belum ada soal"
+      <ExamQuestionsEditor
+        examId={exam.id}
+        initialQuestions={list}
+        locked={hasAttempts}
       />
 
-      <Panel className="mt-4" title="Tentang editor ini">
-        <p className="flex items-start gap-1.5 text-[12px] leading-relaxed text-muted">
-          <Info className="mt-0.5 size-3.5 shrink-0 text-navy-600" aria-hidden />
-          <span>
-            Perubahan di sini belum disimpan ke mana pun: aplikasi masih berjalan tanpa server.
-            Setelah backend terpasang, tombol Simpan akan memanggil penyimpanan sungguhan dan
-            editor ini menjadi sumber data ujian.
-          </span>
-        </p>
-      </Panel>
+      <Link
+        href={`/admin/exams/${exam.id}`}
+        className="press mt-4 inline-flex min-h-11 items-center gap-1.5 rounded-field px-2 text-[12.5px] font-semibold text-muted hover:bg-line-soft hover:text-ink"
+      >
+        <ArrowLeft className="size-3.5" aria-hidden /> Kembali ke ringkasan
+      </Link>
     </>
   );
 }

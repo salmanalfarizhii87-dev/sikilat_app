@@ -7,9 +7,25 @@ import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/field";
 import { Modal } from "@/components/ui/modal";
 import { cn } from "@/lib/utils";
-import type { Exam } from "@/lib/types";
+import { resumeAttempt, startAttempt } from "@/features/attempts/actions";
+import type { PublicExam } from "@/features/exams/types";
 
-export function StartForm({ exam }: { exam: Exam }) {
+/**
+ * Formulir mulai/lanjutkan ujian (T5.3, T5.4).
+ *
+ * Semua keputusan ada di server: nama sudah dipakai, kuota percobaan habis,
+ * ujian belum dibuka, Kode Lanjut salah. Komponen ini hanya mengumpulkan
+ * masukan, memanggil Server Action, dan menampilkan pesan yang dikembalikan.
+ *
+ * Pemeriksaan di klien (`name.trim().length < 2`, kelas wajib) tetap ada supaya
+ * peserta tidak menunggu perjalanan jaringan untuk kesalahan yang jelas — tetapi
+ * itu kenyamanan, bukan pengaman: server memvalidasi ulang semuanya.
+ *
+ * Tidak ada lagi yang ditulis ke `localStorage`. Identitas peserta sekarang
+ * hidup di cookie `httpOnly` yang dipasang Server Action, sehingga nama yang
+ * tampil di layar tidak bisa diubah lewat DevTools.
+ */
+export function StartForm({ exam }: { exam: PublicExam }) {
   const router = useRouter();
   const [name, setName] = React.useState("");
   const [className, setClassName] = React.useState("");
@@ -18,9 +34,11 @@ export function StartForm({ exam }: { exam: Exam }) {
   const [resumeOpen, setResumeOpen] = React.useState(false);
   const [resumeCode, setResumeCode] = React.useState("");
   const [resumeError, setResumeError] = React.useState<string | null>(null);
+  const [resumePending, setResumePending] = React.useState(false);
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+
     if (name.trim().length < 2) {
       setError("Nama minimal 2 karakter.");
       return;
@@ -29,51 +47,48 @@ export function StartForm({ exam }: { exam: Exam }) {
       setError("Kelas wajib diisi untuk ujian ini.");
       return;
     }
+
     setError(null);
     setPending(true);
-    try {
-      window.localStorage.setItem(
-        "kilat_participant",
-        JSON.stringify({ name: name.trim(), className: className.trim() }),
-      );
-    } catch {
-      // penyimpanan diblokir: attempt tetap bisa dibuat di halaman berikutnya
+
+    const result = await startAttempt({ code: exam.code, name, className });
+    setPending(false);
+
+    if (!result.ok) {
+      setError(result.error.message);
+      // `NAME_IN_USE` bisa ditindaklanjuti dengan Kode Lanjut, jadi tawarkan
+      // langsung alih-alih membiarkan peserta menebak langkah berikutnya.
+      if (result.error.code === "NAME_IN_USE") setResumeOpen(true);
+      return;
     }
-    router.push(`/u/${exam.code}/kerjakan`);
+
+    router.push(`/u/${result.data.code}/kerjakan`);
   };
 
-  /**
-   * Di mode demo attempt hanya hidup di localStorage perangkat ini. Karena itu
-   * kode diverifikasi terhadap attempt yang benar-benar tersimpan di sini,
-   * bukan diterima apa adanya. Setelah backend terpasang, pemeriksaan pindah
-   * ke server dan kode yang sama bisa dipakai dari perangkat lain.
-   */
-  const resume = () => {
+  const resume = async () => {
     const code = resumeCode.trim().toUpperCase();
-    if (code.length !== 6) {
+    if (code.length < 4) {
       setResumeError("Kode Lanjut terdiri dari 6 karakter.");
       return;
     }
-    let saved: { attempt?: { examId?: string; resumeCode?: string } } | null = null;
-    try {
-      const raw = window.localStorage.getItem("kilat_attempt_v1");
-      saved = raw ? (JSON.parse(raw) as { attempt?: { examId?: string; resumeCode?: string } }) : null;
-    } catch {
-      saved = null;
-    }
-    const attempt = saved?.attempt;
-    if (!attempt || attempt.examId !== exam.id) {
-      setResumeError(
-        "Tidak ada pengerjaan tersimpan di perangkat ini. Mulai ujian baru lewat form di atas.",
-      );
+    if (name.trim().length < 2) {
+      setResumeError("Isi nama lengkapmu dulu di form utama.");
       return;
     }
-    if (attempt.resumeCode !== code) {
-      setResumeError("Kode Lanjut tidak cocok dengan pengerjaan di perangkat ini.");
-      return;
-    }
+
     setResumeError(null);
-    router.push(`/u/${exam.code}/kerjakan`);
+    setResumePending(true);
+
+    const result = await resumeAttempt({ code: exam.code, name, resumeCode: code });
+    setResumePending(false);
+
+    if (!result.ok) {
+      setResumeError(result.error.message);
+      return;
+    }
+
+    setResumeOpen(false);
+    router.push(`/u/${result.data.code}/kerjakan`);
   };
 
   return (
@@ -94,7 +109,7 @@ export function StartForm({ exam }: { exam: Exam }) {
                 setName(e.target.value);
                 setError(null);
               }}
-              placeholder="Mis. Rina Kusuma"
+              placeholder="Nama lengkapmu"
               autoComplete="name"
             />
           </Field>
@@ -145,7 +160,7 @@ export function StartForm({ exam }: { exam: Exam }) {
                 <KeyRound className="size-3.5" aria-hidden /> Sudah mulai sebelumnya?
               </span>
               <span className="mt-0.5 block text-[12px] text-muted">
-                Lanjutkan pengerjaan di perangkat ini dengan Kode Lanjut 6 karakter.
+                Lanjutkan pengerjaan di perangkat lain dengan Kode Lanjut 6 karakter.
               </span>
             </span>
             <ArrowRight className="size-3.5 shrink-0 text-muted" aria-hidden />
@@ -157,17 +172,34 @@ export function StartForm({ exam }: { exam: Exam }) {
         open={resumeOpen}
         onClose={() => setResumeOpen(false)}
         title="Lanjutkan ujian"
-        description="Masukkan Kode Lanjut yang tampil di layar ujian."
+        description="Masukkan nama dan Kode Lanjut yang tampil di layar ujian."
         footer={
           <>
             <Button variant="secondary" onClick={() => setResumeOpen(false)}>
               Batal
             </Button>
-            <Button onClick={resume}>Lanjutkan</Button>
+            <Button onClick={resume} disabled={resumePending}>
+              {resumePending ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+              Lanjutkan
+            </Button>
           </>
         }
       >
-        <Field label="Kode Lanjut" htmlFor="resume">
+        <Field label="Nama lengkap" required htmlFor="resume-nama">
+          <Input
+            id="resume-nama"
+            value={name}
+            maxLength={60}
+            onChange={(e) => {
+              setName(e.target.value);
+              setResumeError(null);
+            }}
+            placeholder="Sama seperti saat mulai"
+            autoComplete="name"
+          />
+        </Field>
+
+        <Field label="Kode Lanjut" htmlFor="resume" className="mt-3">
           <Input
             id="resume"
             value={resumeCode}
@@ -175,7 +207,7 @@ export function StartForm({ exam }: { exam: Exam }) {
               setResumeCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6));
               setResumeError(null);
             }}
-            placeholder="Contoh: K7M2QP"
+            placeholder="6 karakter"
             className={cn(
               "h-14 text-center font-heading text-xl font-bold uppercase tracking-[0.3em]",
               resumeError && "border-clay-500",
@@ -183,14 +215,16 @@ export function StartForm({ exam }: { exam: Exam }) {
             autoComplete="off"
           />
         </Field>
+
         {resumeError && (
           <p role="alert" className="mt-2 text-[12.5px] font-medium text-clay-600">
             {resumeError}
           </p>
         )}
+
         <p className="mt-3 rounded-field bg-line-soft px-3 py-2.5 text-[12px] leading-relaxed text-muted">
-          Di mode demo, pengerjaan hanya tersimpan di perangkat ini. Membuka di sini
-          melanjutkan jawaban yang sudah ada, dan waktu ujian tetap berjalan.
+          Melanjutkan di sini akan menghentikan pengerjaan di perangkat lain. Waktu ujian tetap
+          berjalan.
         </p>
       </Modal>
     </>

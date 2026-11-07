@@ -1,13 +1,28 @@
-"use client";
+﻿"use client";
 
-import { cn } from "@/lib/utils";
+import { cn, optionLabel } from "@/lib/utils";
 import { Check, EyeOff, X } from "lucide-react";
-import { optionLabel } from "@/lib/mock-data";
-import type { Option, Question } from "@/lib/types";
+import type { QuestionType } from "@/lib/types";
+
+/**
+ * Bentuk opsi minimal yang dibutuhkan komponen di berkas ini.
+ *
+ * Sengaja struktural, bukan `Option` dari `src/lib/types.ts`: tipe itu membawa
+ * `position` dan dipakai editor soal admin. Runner peserta menerima opsi dari
+ * `get_attempt_state` yang tidak mengirim `position` â€” urutannya sudah final di
+ * dalam array. Memakai tipe yang lebih sempit membuat komponen ini tidak ikut
+ * berubah saat bentuk data admin berubah.
+ */
+interface RenderOption {
+  id: string;
+  body: string;
+  /** URL gambar opsi (sudah ditandatangani server); `null` bila tanpa gambar. */
+  mediaUrl?: string | null;
+}
 
 /**
  * Satu baris opsi jawaban. Target sentuh minimum 56 px supaya nyaman di HP
- * (PRD §9.1), dan teks opsi 15 px ke atas.
+ * (PRD Â§9.1), dan teks opsi 15 px ke atas.
  */
 export function OptionRow({
   option,
@@ -20,7 +35,7 @@ export function OptionRow({
   onToggleCrossout,
   disabled,
 }: {
-  option: Option;
+  option: RenderOption;
   index: number;
   selected: boolean;
   crossed: boolean;
@@ -71,6 +86,14 @@ export function OptionRow({
         )}
       >
         {option.body}
+        {option.mediaUrl && (
+          // eslint-disable-next-line @next/next/no-img-element -- URL bertanda tangan berumur pendek; next/image akan menyimpannya di cache optimizer.
+          <img
+            src={option.mediaUrl}
+            alt={`Gambar opsi ${optionLabel(index)}`}
+            className="mt-2 max-h-56 w-auto rounded-field border border-line"
+          />
+        )}
       </span>
 
       {selected && !crossoutMode && (
@@ -114,7 +137,7 @@ export function OptionRow({
  *
  * Berbeda dari `OptionRow` yang menyatakan pilihan dengan satu penanda, di sini
  * setiap pernyataan punya dua tombol yang selalu terlihat: Benar dan Salah.
- * Tombol yang selalu tampil — bukan menu atau kotak centang — karena peserta
+ * Tombol yang selalu tampil â€” bukan menu atau kotak centang â€” karena peserta
  * harus bisa menilai tiap pernyataan tanpa membuka apa pun, dan karena keadaan
  * "belum dijawab" harus bisa dibedakan dari "dijawab Salah".
  *
@@ -129,7 +152,7 @@ export function TrueFalseRow({
   onAnswer,
   disabled,
 }: {
-  option: Option;
+  option: RenderOption;
   index: number;
   /** `true` = Benar, `false` = Salah, `null` = belum dijawab. */
   value: boolean | null;
@@ -143,6 +166,14 @@ export function TrueFalseRow({
       <p className="text-[15px] leading-relaxed text-ink">
         <span className="mr-1.5 font-heading text-[13px] font-bold text-muted">{index + 1}.</span>
         {option.body}
+        {option.mediaUrl && (
+          // eslint-disable-next-line @next/next/no-img-element -- URL bertanda tangan berumur pendek; next/image akan menyimpannya di cache optimizer.
+          <img
+            src={option.mediaUrl}
+            alt={`Gambar pernyataan ${index + 1}`}
+            className="mt-2 max-h-56 w-auto rounded-field border border-line"
+          />
+        )}
       </p>
 
       <div
@@ -218,8 +249,8 @@ export function EssayAnswer({
 }: {
   value: string;
   onChange: (next: string) => void;
-  wordMin?: number;
-  wordMax?: number;
+  wordMin?: number | null;
+  wordMax?: number | null;
   disabled?: boolean;
 }) {
   const words = value.trim() ? value.trim().split(/\s+/).length : 0;
@@ -262,7 +293,7 @@ export function QuestionHeader({
   total,
   children,
 }: {
-  question: Question;
+  question: { type: QuestionType; points: number };
   index: number;
   total: number;
   children?: React.ReactNode;
