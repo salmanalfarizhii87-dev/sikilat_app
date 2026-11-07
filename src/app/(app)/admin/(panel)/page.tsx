@@ -32,6 +32,10 @@ export default function AdminDashboardPage() {
     .slice(-6)
     .reverse();
 
+  const publishedCount = demoExams.filter((e) => e.status === "published").length;
+  const essayCount = demoQuestions.filter((q) => q.type === "essay").length;
+  const questionCount = demoQuestions.length;
+
   return (
     <>
       <PageHeader
@@ -63,20 +67,22 @@ export default function AdminDashboardPage() {
           hint={`dari ${summary.total} peserta`}
           tone="navy"
           marker
+          progress={(summary.active / Math.max(1, summary.total)) * 100}
         />
         <StatCard
           label="Menunggu nilai"
           value={summary.pending}
-          hint="esai belum dinilai"
+          hint={`${essayCount} esai per peserta`}
         />
         <StatCard
           label="Rata-rata nilai"
           value={summary.average}
           hint={`KKM ${demoExam.passingScore}, ${summary.passRate}% lulus`}
+          progress={summary.passRate}
         />
         <StatCard
           label="Ujian aktif"
-          value={demoExams.filter((e) => e.status === "published").length}
+          value={publishedCount}
           hint={`${demoExams.length} ujian total`}
         />
       </div>
@@ -95,8 +101,9 @@ export default function AdminDashboardPage() {
           }
           padded={false}
         >
+          {/* Kepala panel: identitas ujian + ringkasan sesi dalam satu blok padat. */}
           <div className="border-b border-line bg-canvas px-4 py-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <StatusBadge status={demoExam.status} />
@@ -108,7 +115,7 @@ export default function AdminDashboardPage() {
                   {demoExam.title}
                 </p>
                 <p className="text-[12px] text-muted">
-                  {demoExam.subjectLabel} · {demoQuestions.length} soal ·{" "}
+                  {demoExam.subjectLabel} · {questionCount} soal ·{" "}
                   {demoExam.durationMinutes} menit
                 </p>
               </div>
@@ -123,6 +130,28 @@ export default function AdminDashboardPage() {
                 </Link>
               </div>
             </div>
+
+            {/* Tiga angka sesi: yang mengerjakan, yang menunggu, yang selesai. */}
+            <dl className="mt-3 grid grid-cols-3 gap-2 border-t border-line pt-2.5">
+              <div>
+                <dt className="text-[11px] text-muted">Mengerjakan</dt>
+                <dd className="font-heading text-[15px] font-extrabold tabular text-ink">
+                  {summary.active}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-[11px] text-muted">Menunggu nilai</dt>
+                <dd className="font-heading text-[15px] font-extrabold tabular text-ink">
+                  {summary.pending}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-[11px] text-muted">Sudah dinilai</dt>
+                <dd className="font-heading text-[15px] font-extrabold tabular text-ink">
+                  {summary.graded}
+                </dd>
+              </div>
+            </dl>
           </div>
 
           <ul className="divide-y divide-line">
@@ -142,11 +171,11 @@ export default function AdminDashboardPage() {
                       <div className="h-1.5 w-20 overflow-hidden rounded-full bg-line-soft">
                         <div
                           className="h-full rounded-full bg-navy-700"
-                          style={{ width: `${(answered / demoQuestions.length) * 100}%` }}
+                          style={{ width: `${(answered / questionCount) * 100}%` }}
                         />
                       </div>
                       <span className="text-[11.5px] tabular text-muted">
-                        {answered}/{demoQuestions.length} soal
+                        {answered}/{questionCount} soal
                       </span>
                     </div>
                   </div>
@@ -163,6 +192,16 @@ export default function AdminDashboardPage() {
               );
             })}
           </ul>
+
+          <div className="border-t border-line bg-canvas px-4 py-2">
+            <Link
+              href={`/admin/exams/${demoExam.id}/monitor`}
+              className="press inline-flex min-h-11 items-center gap-1 font-heading text-[12.5px] font-semibold text-navy-700 hover:underline"
+            >
+              Lihat {summary.active} peserta di monitor
+              <ArrowRight className="size-3.5" aria-hidden />
+            </Link>
+          </div>
         </Panel>
 
         <div className="space-y-4">
@@ -227,13 +266,14 @@ export default function AdminDashboardPage() {
       <div className="mt-4 grid gap-4 xl:grid-cols-[1.4fr_1fr]">
         <Panel title="Aktivitas terbaru" description="Percobaan yang baru selesai." padded={false}>
           <div className="scroll-thin relative overflow-x-auto">
-            <table className="w-full min-w-[520px] text-left">
+            <table className="w-full text-left">
               <thead>
                 <tr className="border-b border-line text-[12px] text-muted">
                   <th scope="col" className="px-4 py-2 font-heading font-semibold">
                     Peserta
                   </th>
-                  <th scope="col" className="px-4 py-2 font-heading font-semibold">
+                  {/* Kolom waktu disembunyikan di HP: nilai dan status lebih penting. */}
+                  <th scope="col" className="hidden px-4 py-2 font-heading font-semibold sm:table-cell">
                     Selesai
                   </th>
                   <th scope="col" className="px-4 py-2 font-heading font-semibold">
@@ -247,6 +287,7 @@ export default function AdminDashboardPage() {
               <tbody className="divide-y divide-line">
                 {recent.map((attempt) => {
                   const pct = attemptPercent(attempt);
+                  const passed = pct >= demoExam.passingScore;
                   return (
                     <tr key={attempt.id} className="hover:bg-canvas">
                       <td className="px-4 py-2.5">
@@ -255,7 +296,7 @@ export default function AdminDashboardPage() {
                         </p>
                         <p className="text-[11.5px] text-muted">Kelas {attempt.participantClass}</p>
                       </td>
-                      <td className="px-4 py-2.5 text-[12px] tabular text-muted">
+                      <td className="hidden px-4 py-2.5 text-[12px] tabular text-muted sm:table-cell">
                         {attempt.submittedAt ? formatClock(attempt.submittedAt) : "-"}
                       </td>
                       <td className="px-4 py-2.5">
@@ -263,6 +304,18 @@ export default function AdminDashboardPage() {
                           {pct}
                         </span>
                         <span className="text-[11.5px] text-muted"> /100</span>
+                        {/* Penanda lulus hanya bila nilainya sudah final. */}
+                        {attempt.status === "graded" && (
+                          <span
+                            className={
+                              passed
+                                ? "ml-1.5 font-heading text-[11px] font-semibold text-leaf-700"
+                                : "ml-1.5 font-heading text-[11px] font-semibold text-clay-600"
+                            }
+                          >
+                            {passed ? "lulus" : "di bawah KKM"}
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-2.5">
                         <StatusBadge status={attempt.status} />

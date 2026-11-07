@@ -50,12 +50,18 @@ export function StatCard({
   hint,
   tone = "plain",
   marker,
+  progress,
 }: {
   label: string;
   value: React.ReactNode;
   hint?: string;
   tone?: "plain" | "amber" | "navy" | "green" | "red";
   marker?: boolean;
+  /**
+   * Bilah progres 0–100 di bawah angka. Hanya dipakai bila nilainya berasal dari
+   * data nyata (mis. persentase lulus); tidak ada deret waktu karangan.
+   */
+  progress?: number;
 }) {
   const tones = {
     plain: "bg-surface border-line",
@@ -98,6 +104,20 @@ export function StatCard({
         >
           {hint}
         </p>
+      )}
+      {typeof progress === "number" && (
+        <div
+          className={cn(
+            "mt-2 h-1 overflow-hidden rounded-full",
+            isDark ? "bg-white/20" : "bg-line-soft",
+          )}
+          role="presentation"
+        >
+          <div
+            className={cn("h-full rounded-full", isDark ? "bg-accent-400" : "bg-navy-700")}
+            style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
+          />
+        </div>
       )}
     </div>
   );
