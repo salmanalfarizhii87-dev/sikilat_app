@@ -213,24 +213,61 @@ export async function listExams(input: Partial<ExamListParamsInput>): Promise<Ex
   const params = examListParamsSchema.parse(input);
   const supabase = await createClient();
 
-  const from = (params.page - 1) * params.pageSize;
-  const to = from + params.pageSize - 1;
+  /**
+   * Susun query untuk satu halaman tertentu.
+   *
+   * `page` diterima sebagai argumen karena bisa berubah setelah koreksi di
+   * bawah; `params.page` tidak boleh ditimpa karena itu milik pemanggil.
+   */
+  const buildQuery = (page: number) => {
+    const from = (page - 1) * params.pageSize;
+    const to = from + params.pageSize - 1;
 
-  let query = supabase
-    .from("exams")
-    .select(LIST_COLUMNS, { count: "exact" })
-    .order("created_at", { ascending: false })
-    // Urutan kedua mencegah baris berpindah halaman saat `created_at` sama
-    // (seed membuat beberapa ujian dalam transaksi yang sama).
-    .order("id", { ascending: false })
-    .range(from, to);
+    let query = supabase
+      .from("exams")
+      .select(LIST_COLUMNS, { count: "exact" })
+      .order("created_at", { ascending: false })
+      // Urutan kedua mencegah baris berpindah halaman saat `created_at` sama
+      // (seed membuat beberapa ujian dalam transaksi yang sama).
+      .order("id", { ascending: false })
+      .range(from, to);
 
-  if (params.status !== "all") query = query.eq("status", params.status);
+    if (params.status !== "all") query = query.eq("status", params.status);
 
-  const searchFilter = buildSearchFilter(params.search);
-  if (searchFilter) query = query.or(searchFilter);
+    const searchFilter = buildSearchFilter(params.search);
+    if (searchFilter) query = query.or(searchFilter);
 
-  const { data, error, count } = await query;
+    return query;
+  };
+
+  let page = params.page;
+  let { data, error, count } = await buildQuery(page);
+
+  /*
+   * PostgREST membalas `416 Requested range not satisfiable` bila offset awal
+   * sudah melewati jumlah baris — bukan halaman kosong. Tanpa penanganan ini,
+   * URL yang di-bookmark sebelum ujian dihapus, atau `?page=999` yang diketik
+   * manual, menghasilkan halaman error 500.
+   *
+   * Perbaikannya: hitung ulang totalnya, lalu ambil halaman terakhir yang benar.
+   * Hanya terjadi sekali dan hanya pada permintaan yang memang di luar jangkauan,
+   * jadi tidak ada biaya pada navigasi normal.
+   */
+  if (error?.code === "PGRST103") {
+    const fallback = await buildQuery(1);
+    const total = fallback.count ?? 0;
+    const lastPage = Math.max(1, Math.ceil(total / params.pageSize));
+
+    if (lastPage !== page) {
+      page = lastPage;
+      ({ data, error, count } = await buildQuery(page));
+    } else {
+      // Totalnya nol: tidak ada halaman yang bisa diambil.
+      data = [];
+      error = null;
+      count = 0;
+    }
+  }
 
   if (error) {
     console.error("[listExams] gagal membaca daftar ujian:", error.message);
@@ -242,7 +279,9 @@ export async function listExams(input: Partial<ExamListParamsInput>): Promise<Ex
   return {
     rows,
     total: count ?? rows.length,
-    page: params.page,
+    // Halaman yang benar-benar ditampilkan, bukan yang diminta. Paginasi di UI
+    // membaca angka ini supaya "2 / 2" tidak bertentangan dengan isi tabel.
+    page,
     pageSize: params.pageSize,
   };
 }

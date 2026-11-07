@@ -481,6 +481,7 @@ export type Database = {
     }
     Functions: {
       assert_admin: { Args: never; Returns: string }
+      duplicate_exam: { Args: { p_exam_id: string }; Returns: Json }
       expire_overdue_attempts: { Args: never; Returns: number }
       final_score: {
         Args: { p_exam_id: string; p_name_norm: string }

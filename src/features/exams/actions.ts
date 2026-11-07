@@ -8,6 +8,7 @@ import { requireAdmin } from "@/lib/auth/require-admin";
 import { createClient } from "@/lib/supabase/server";
 import type { Database } from "@/types/database.types";
 import {
+  deleteExamSchema,
   examIdSchema,
   examSettingsSchema,
   examUpdateSchema,
@@ -702,4 +703,230 @@ export async function extendCloseTime(
   return ok({ closesAt });
 }
 
+/* -------------------------------------------------------------------------- */
+/* duplicateExam (EXM-10)                                                     */
+/* -------------------------------------------------------------------------- */
 
+/**
+ * Duplikat ujian beserta soal dan opsinya sebagai draft baru.
+ *
+ * Seluruh penyalinan berjalan di dalam RPC `duplicate_exam` (migrasi 0015),
+ * bukan di sini. Alasannya bukan kerapian: menyalin tiga tabel sambil memetakan
+ * ID lama ke ID baru hanya bisa benar dalam satu transaksi. Kalau langkah ketiga
+ * gagal, aplikasi akan meninggalkan ujian duplikat dengan soal setengah jadi
+ * dan tidak ada cara membatalkannya dari UI.
+ *
+ * `p_exam_id` dikirim apa adanya karena skema RPC di database yang memvalidasi
+ * tipenya (`uuid`); id yang bukan UUID akan ditolak PostgREST sebelum menyentuh
+ * fungsi. Pemeriksaan bentuk di sini tetap dilakukan supaya pesan galatnya
+ * berbahasa Indonesia, bukan `22P02`.
+ */
+export async function duplicateExam(
+  examId: unknown,
+): Promise<ActionResult<{ examId: string; code: string; questions: number }>> {
+  const idParsed = examIdSchema.safeParse({ examId });
+  if (!idParsed.success) return validationFail(idParsed.error);
+
+  const auth = await requireAdmin();
+  if (!auth.ok) return auth;
+
+  const supabase = await createClient();
+
+  const { data, error } = await supabase.rpc("duplicate_exam", {
+    p_exam_id: idParsed.data.examId,
+  });
+
+  if (error) {
+    if (error.message.includes("NOT_FOUND")) {
+      return fail("NOT_FOUND", "Ujian yang mau diduplikat tidak ditemukan.");
+    }
+    return mapDbError(error);
+  }
+
+  // RPC mengembalikan `jsonb`; tipe Supabase membacanya sebagai `Json`.
+  const result = data as unknown as { examId: string; code: string; questions: number } | null;
+
+  if (!result?.examId) {
+    console.error("[duplicateExam] RPC tidak mengembalikan examId:", JSON.stringify(data));
+    return fail("INTERNAL", "Gagal menduplikat ujian. Coba lagi sebentar lagi.");
+  }
+
+  revalidatePath(EXAMS_PATH);
+  return ok({ examId: result.examId, code: result.code, questions: result.questions });
+}
+
+/* -------------------------------------------------------------------------- */
+/* archiveExam / unarchiveExam (EXM-13)                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Arsipkan ujian (EXM-13).
+ *
+ * Arsip adalah keadaan akhir yang aman: peserta tidak bisa lagi masuk (kode
+ * hanya melayani ujian `published`), semua attempt dan nilainya tetap utuh, dan
+ * ujian masih bisa dikembalikan. Karena itu arsip **tidak** memerlukan
+ * konfirmasi judul — berbeda dari hapus permanen.
+ *
+ * `closes_at` diisi bila masih kosong supaya arsip tidak menyisakan ujian
+ * "terbuka tanpa batas" yang secara logika bertentangan dengan statusnya.
+ */
+export async function archiveExam(examId: unknown): Promise<ActionResult<{ status: "archived" }>> {
+  const idParsed = examIdSchema.safeParse({ examId });
+  if (!idParsed.success) return validationFail(idParsed.error);
+
+  const auth = await requireAdmin();
+  if (!auth.ok) return auth;
+
+  const supabase = await createClient();
+
+  const { row: exam, error: readError } = await fetchExam(supabase, idParsed.data.examId);
+  if (readError) return readError;
+  if (!exam) return fail("NOT_FOUND", "Ujian tidak ditemukan.");
+
+  if (exam.status === "archived") {
+    return fail("CONFLICT", "Ujian ini sudah diarsipkan.");
+  }
+
+  const now = new Date().toISOString();
+
+  const { error } = await supabase
+    .from("exams")
+    .update({
+      status: "archived",
+      // Jangan menimpa jadwal tutup yang sudah ada: itu catatan kapan ujian
+      // benar-benar berhenti, dan arsip seharusnya tidak mengubah sejarah.
+      closes_at: exam.closes_at ?? now,
+      updated_at: now,
+    })
+    .eq("id", exam.id);
+
+  if (error) return mapDbError(error);
+
+  await audit(supabase, "archive_exam", exam.id, { status: exam.status }, { status: "archived" });
+
+  revalidatePath(EXAMS_PATH);
+  revalidatePath(`${EXAMS_PATH}/${exam.id}`);
+  return ok({ status: "archived" });
+}
+
+/**
+ * Keluarkan ujian dari arsip, kembali ke `draft`.
+ *
+ * Sengaja **tidak** langsung `published`. Mengaktifkan kembali ujian lama tanpa
+ * memeriksa ulang EXM-08 (mis. soalnya sudah dihapus) akan menghasilkan ujian
+ * aktif yang tidak bisa dikerjakan. Draft memaksa admin melewati `publishExam`
+ * yang memeriksa semuanya.
+ */
+export async function unarchiveExam(examId: unknown): Promise<ActionResult<{ status: "draft" }>> {
+  const idParsed = examIdSchema.safeParse({ examId });
+  if (!idParsed.success) return validationFail(idParsed.error);
+
+  const auth = await requireAdmin();
+  if (!auth.ok) return auth;
+
+  const supabase = await createClient();
+
+  const { row: exam, error: readError } = await fetchExam(supabase, idParsed.data.examId);
+  if (readError) return readError;
+  if (!exam) return fail("NOT_FOUND", "Ujian tidak ditemukan.");
+
+  if (exam.status !== "archived") {
+    return fail("CONFLICT", "Ujian ini tidak sedang diarsipkan.");
+  }
+
+  const { error } = await supabase
+    .from("exams")
+    .update({ status: "draft", updated_at: new Date().toISOString() })
+    .eq("id", exam.id);
+
+  if (error) return mapDbError(error);
+
+  await audit(supabase, "unarchive_exam", exam.id, { status: "archived" }, { status: "draft" });
+
+  revalidatePath(EXAMS_PATH);
+  revalidatePath(`${EXAMS_PATH}/${exam.id}`);
+  return ok({ status: "draft" });
+}
+
+/* -------------------------------------------------------------------------- */
+/* deleteExam (EXM-13)                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Hapus ujian secara permanen.
+ *
+ * Tiga lapis penjagaan, dan ketiganya harus ada:
+ *
+ * 1. **Konfirmasi judul** dibandingkan di server. Tombol yang dinonaktifkan di
+ *    UI tidak cukup: Server Action adalah endpoint HTTP yang bisa dipanggil
+ *    tanpa UI.
+ * 2. **Harus berstatus arsip.** Ujian aktif atau draft yang dihapus bisa
+ *    menghapus attempt yang sedang berjalan. Arsip adalah pernyataan eksplisit
+ *    bahwa ujian ini sudah selesai.
+ * 3. **Tidak boleh punya attempt.** Meski sudah diarsipkan, nilai peserta adalah
+ *    catatan akademik. Menghapusnya menghapus riwayat yang tidak bisa dibuat
+ *    ulang. Untuk ujian tanpa attempt, hapus permanen aman.
+ *
+ * Perbandingan judul memakai bentuk ternormalisasi (spasi dirapikan, huruf
+ * kecil) supaya admin yang mengetik ulang dengan kapitalisasi berbeda tidak
+ * dihukum — yang dicegah adalah penghapusan karena salah klik, bukan salah
+ * kapital.
+ */
+export async function deleteExam(
+  examId: unknown,
+  titleConfirmation: unknown,
+): Promise<ActionResult<{ deleted: true }>> {
+  const parsed = deleteExamSchema.safeParse({ examId, titleConfirmation });
+  if (!parsed.success) return validationFail(parsed.error);
+
+  const auth = await requireAdmin();
+  if (!auth.ok) return auth;
+
+  const supabase = await createClient();
+
+  const { row: exam, error: readError } = await fetchExam(supabase, parsed.data.examId);
+  if (readError) return readError;
+  if (!exam) return fail("NOT_FOUND", "Ujian tidak ditemukan.");
+
+  if (exam.status !== "archived") {
+    return fail(
+      "CONFLICT",
+      "Ujian hanya bisa dihapus permanen setelah diarsipkan. Arsipkan dulu, lalu hapus.",
+    );
+  }
+
+  const { count, error: countError } = await supabase
+    .from("attempts")
+    .select("id", { count: "exact", head: true })
+    .eq("exam_id", exam.id);
+
+  if (countError) return mapDbError(countError);
+
+  if ((count ?? 0) > 0) {
+    return fail(
+      "CONFLICT",
+      `Ujian ini punya ${count} percobaan peserta. Nilai peserta tidak bisa dihapus — arsipkan saja.`,
+    );
+  }
+
+  const normalize = (value: string) => value.trim().toLowerCase().replace(/\s+/g, " ");
+
+  if (normalize(parsed.data.titleConfirmation) !== normalize(exam.title)) {
+    return fail("VALIDATION", "Judul yang diketik tidak cocok. Periksa lagi.", {
+      titleConfirmation: ["Judul yang diketik tidak cocok dengan judul ujian."],
+    });
+  }
+
+  /*
+   * Audit ditulis **sebelum** baris dihapus, dan `entity_id` sengaja dibiarkan
+   * menunjuk ujian yang sudah tidak ada. Log ini justru harus bertahan setelah
+   * datanya hilang — itulah gunanya.
+   */
+  await audit(supabase, "delete_exam", exam.id, { code: exam.code, title: exam.title }, null);
+
+  const { error } = await supabase.from("exams").delete().eq("id", exam.id);
+  if (error) return mapDbError(error);
+
+  revalidatePath(EXAMS_PATH);
+  return ok({ deleted: true });
+}

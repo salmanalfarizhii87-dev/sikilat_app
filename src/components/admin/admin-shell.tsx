@@ -26,7 +26,11 @@ const nav = [
   { href: "/admin/account", label: "Akun", icon: Settings },
 ];
 
+/** Pola UUID, dipakai untuk mengenali segmen ID ujian di breadcrumb. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** Label manusia untuk breadcrumb, dikunci per segmen rute. */
+
 const CRUMBS: Record<string, string> = {
   exams: "Ujian",
   new: "Ujian baru",
@@ -42,12 +46,22 @@ const CRUMBS: Record<string, string> = {
 function buildCrumbs(pathname: string) {
   const segments = pathname.split("/").filter(Boolean).slice(1);
   if (segments.length === 0) return ["Dashboard"];
-  return segments.map((segment) => {
-    if (CRUMBS[segment]) return CRUMBS[segment];
-    if (/^exm_/i.test(segment)) return demoExam.code;
-    if (/^att_/i.test(segment)) return "Attempt";
-    return segment.replace(/-/g, " ");
-  });
+  return segments
+    .filter((segment) => {
+      /*
+       * Segmen ID ujian sekarang berupa UUID, bukan `exm_01` lagi, dan tidak
+       * menambah informasi apa pun: induknya sudah "Ujian", sedangkan judul
+       * sebenarnya tampil di kepala halaman. Membiarkannya menghasilkan
+       * breadcrumb "Ujian > Ujian"; menampilkan UUID mentah lebih buruk lagi.
+       */
+      return !UUID_RE.test(segment);
+    })
+    .map((segment) => {
+      if (CRUMBS[segment]) return CRUMBS[segment];
+      if (/^exm_/i.test(segment)) return demoExam.code;
+      if (/^att_/i.test(segment)) return "Attempt";
+      return segment.replace(/-/g, " ");
+    });
 }
 
 /**
@@ -157,7 +171,8 @@ export function AdminShell({
 
       <div className="border-t border-line p-3">
         <p className="px-1 text-[11.5px] leading-relaxed text-muted">
-          Data di panel ini masih contoh. Belum ada ujian sungguhan yang tersimpan.
+          Daftar ujian dan statusnya sudah tersimpan di server. Soal, dashboard, dan rekap
+          nilai masih memakai data contoh.
         </p>
       </div>
     </div>

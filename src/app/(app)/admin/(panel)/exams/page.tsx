@@ -1,59 +1,46 @@
-"use client";
-
-import * as React from "react";
 import Link from "next/link";
 import {
-  Archive,
   ArrowUpRight,
   CalendarClock,
-  Copy,
   FilePlus2,
   FileStack,
-  MoreHorizontal,
   SearchX,
   Users,
 } from "lucide-react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { EmptyState, SampleDataNote } from "@/components/ui/primitives";
-import {
-  PageHeader,
-  SearchInput,
-  FilterChips,
-  StatusBadge,
-  CopyButton,
-  Panel,
-} from "@/components/admin/ui";
-import { demoExams, demoQuestions } from "@/lib/mock-data";
-import { demoAttempts } from "@/lib/admin-data";
+import { EmptyState } from "@/components/ui/primitives";
+import { PageHeader, StatusBadge, CopyButton, Panel } from "@/components/admin/ui";
+import { getExamStatusCounts, listExams, parseExamListParams } from "@/features/exams/queries";
+import type { ExamListItem } from "@/features/exams/types";
 import { formatDateId } from "@/lib/utils";
-import type { Exam, ExamStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { ExamPagination, ExamResetFilters, ExamSearchInput, ExamStatusFilter } from "./exam-filters";
+import { ExamRowMenu } from "./exam-row-menu";
 
-type Filter = "all" | ExamStatus;
+/**
+ * Daftar ujian (T3.5).
+ *
+ * Server Component: pencarian, filter, dan paginasi dikerjakan **di database**
+ * lewat `listExams`, dan keadaannya disimpan di URL. Sebelumnya halaman ini
+ * komponen klien yang memuat tiga ujian contoh lalu menyaringnya dengan
+ * `useState` — tidak akan pernah bekerja untuk data sungguhan.
+ *
+ * `searchParams` dibaca sebagai Promise (Next.js 16) dan dinormalkan lewat
+ * `parseExamListParams`, sehingga URL aneh (`?page=0`, `?status=ngawur`)
+ * menampilkan halaman pertama alih-alih error.
+ */
+export default async function AdminExamsPage({ searchParams }: PageProps<"/admin/exams">) {
+  const params = parseExamListParams(await searchParams);
 
-export default function AdminExamsPage() {
-  const [query, setQuery] = React.useState("");
-  const [filter, setFilter] = React.useState<Filter>("all");
-  const [menuFor, setMenuFor] = React.useState<string | null>(null);
+  /*
+   * Dua query berjalan paralel. `getExamStatusCounts` menghitung seluruh tabel
+   * per status (untuk chip), `listExams` hanya mengambil satu halaman.
+   * Dijalankan berurutan akan menambah satu perjalanan penuh ke database tanpa
+   * alasan.
+   */
+  const [list, counts] = await Promise.all([listExams(params), getExamStatusCounts()]);
 
-  const counts = {
-    all: demoExams.length,
-    published: demoExams.filter((e) => e.status === "published").length,
-    draft: demoExams.filter((e) => e.status === "draft").length,
-    archived: demoExams.filter((e) => e.status === "archived").length,
-  };
-
-  const visible = demoExams.filter((exam) => {
-    if (filter !== "all" && exam.status !== filter) return false;
-    const q = query.trim().toLowerCase();
-    if (!q) return true;
-    return (
-      exam.title.toLowerCase().includes(q) ||
-      exam.code.toLowerCase().includes(q) ||
-      exam.subjectLabel.toLowerCase().includes(q)
-    );
-  });
+  const filtering = params.search !== "" || params.status !== "all";
 
   return (
     <>
@@ -69,82 +56,53 @@ export default function AdminExamsPage() {
         }
       />
 
-      <SampleDataNote className="mb-3">
-        Tiga ujian di bawah adalah contoh bawaan. Ujian yang kamu buat belum tersimpan ke server.
-      </SampleDataNote>
-
       <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <SearchInput
-          value={query}
-          onChange={setQuery}
-          label="Cari ujian"
-          placeholder="Cari judul, kode, atau mata pelajaran"
-          className="sm:max-w-[340px]"
-        />
-        <FilterChips
-          label="Filter status ujian"
-          value={filter}
-          onChange={setFilter}
-          options={[
-            { key: "all", label: "Semua", count: counts.all },
-            { key: "published", label: "Aktif", count: counts.published },
-            { key: "draft", label: "Draft", count: counts.draft },
-            { key: "archived", label: "Arsip", count: counts.archived },
-          ]}
-        />
+        <div className="sm:max-w-[340px] sm:flex-1">
+          <ExamSearchInput
+            value={params.search}
+            placeholder="Cari judul, kode, atau mata pelajaran"
+          />
+        </div>
+        <ExamStatusFilter value={params.status} counts={counts} />
       </div>
 
-      {visible.length === 0 ? (
+      {list.rows.length === 0 ? (
         <Panel>
           <EmptyState
             icon={<SearchX className="size-6" aria-hidden />}
-            title="Tidak ada ujian yang cocok"
-            description="Coba kata kunci lain, atau kembali ke semua ujian."
+            title={filtering ? "Tidak ada ujian yang cocok" : "Belum ada ujian"}
+            description={
+              filtering
+                ? "Coba kata kunci lain, atau kembali ke semua ujian."
+                : "Ujian yang kamu buat akan muncul di sini sebagai draft."
+            }
             action={
-              <Button
-                size="md"
-                onClick={() => {
-                  setQuery("");
-                  setFilter("all");
-                }}
-              >
-                Tampilkan semua ujian
-              </Button>
+              filtering ? (
+                <ExamResetFilters />
+              ) : (
+                <Link href="/admin/exams/new">
+                  <Button size="md">
+                    <FilePlus2 className="size-4" aria-hidden /> Buat ujian
+                  </Button>
+                </Link>
+              )
             }
           />
         </Panel>
       ) : (
         <div className="space-y-2.5">
-          {visible.map((exam) => (
-            <ExamRow
-              key={exam.id}
-              exam={exam}
-              menuOpen={menuFor === exam.id}
-              onToggleMenu={() => setMenuFor((v) => (v === exam.id ? null : exam.id))}
-            />
+          {list.rows.map((exam) => (
+            <ExamRow key={exam.id} exam={exam} />
           ))}
         </div>
       )}
 
-      <p className="mt-4 text-[12px] text-muted">
-        Menampilkan {visible.length} dari {demoExams.length} ujian.
-      </p>
+      <ExamPagination page={list.page} pageSize={list.pageSize} total={list.total} />
     </>
   );
 }
 
-function ExamRow({
-  exam,
-  menuOpen,
-  onToggleMenu,
-}: {
-  exam: Exam;
-  menuOpen: boolean;
-  onToggleMenu: () => void;
-}) {
-  const attempts = demoAttempts.filter((a) => a.examId === exam.id);
-  const questionCount = exam.id === demoExams[0].id ? demoQuestions.length : 20;
-
+function ExamRow({ exam }: { exam: ExamListItem }) {
   return (
     <div className="relative rounded-card border border-line bg-surface p-3.5 sm:p-4">
       <div className="flex flex-wrap items-start gap-3">
@@ -168,7 +126,9 @@ function ExamRow({
             <span className="rounded-xs bg-line-soft px-1.5 py-0.5 font-heading text-[11px] font-bold text-ink-soft">
               {exam.code}
             </span>
-            <span className="text-[12px] text-muted">{exam.subjectLabel}</span>
+            {exam.subjectLabel && (
+              <span className="text-[12px] text-muted">{exam.subjectLabel}</span>
+            )}
           </div>
           {/* Judul adalah tautan utama ke detail ujian, jadi seluruh barisnya
               harus bisa disentuh (44 px), bukan hanya tinggi teksnya. */}
@@ -180,13 +140,13 @@ function ExamRow({
           </Link>
           <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted">
             <span className="flex items-center gap-1">
-              <FileStack className="size-3.5" aria-hidden /> {questionCount} soal
+              <FileStack className="size-3.5" aria-hidden /> {exam.questionCount} soal
             </span>
             <span className="flex items-center gap-1">
               <CalendarClock className="size-3.5" aria-hidden /> {exam.durationMinutes} menit
             </span>
             <span className="flex items-center gap-1">
-              <Users className="size-3.5" aria-hidden /> {attempts.length} peserta
+              <Users className="size-3.5" aria-hidden /> {exam.attemptCount} peserta
             </span>
             <span className="hidden sm:inline">Dibuat {formatDateId(exam.createdAt)}</span>
           </div>
@@ -203,78 +163,15 @@ function ExamRow({
           >
             Kelola <ArrowUpRight className="size-3.5" aria-hidden />
           </Link>
-          <div className="relative">
-            <button
-              type="button"
-              onClick={onToggleMenu}
-              aria-label={`Aksi lain untuk ${exam.title}`}
-              aria-expanded={menuOpen}
-              aria-haspopup="menu"
-              className="press grid size-11 place-items-center rounded-field text-muted hover:bg-line-soft"
-            >
-              <MoreHorizontal className="size-4" aria-hidden />
-            </button>
-
-            {menuOpen && (
-              <>
-                <div className="fixed inset-0 z-10" onClick={onToggleMenu} aria-hidden />
-                <div
-                  role="menu"
-                  className="animate-rise absolute right-0 top-10 z-20 w-52 overflow-hidden rounded-card border border-line bg-surface py-1 shadow-pop"
-                >
-                  <MenuItem
-                    icon={<Copy className="size-3.5" aria-hidden />}
-                    label="Salin tautan peserta"
-                    onClick={() => {
-                      navigator.clipboard?.writeText(`${window.location.origin}/u/${exam.code}`);
-                      toast.success("Tautan peserta disalin");
-                      onToggleMenu();
-                    }}
-                  />
-                  <MenuItem
-                    icon={<Copy className="size-3.5" aria-hidden />}
-                    label="Duplikat ujian"
-                    onClick={() => {
-                      toast("Belum tersambung ke server. Duplikat butuh penyimpanan.");
-                      onToggleMenu();
-                    }}
-                  />
-                  <MenuItem
-                    icon={<Archive className="size-3.5" aria-hidden />}
-                    label={exam.status === "archived" ? "Keluarkan dari arsip" : "Arsipkan"}
-                    onClick={() => {
-                      toast("Belum tersambung ke server. Status ujian tidak berubah.");
-                      onToggleMenu();
-                    }}
-                  />
-                </div>
-              </>
-            )}
-          </div>
+          <ExamRowMenu
+            examId={exam.id}
+            code={exam.code}
+            title={exam.title}
+            status={exam.status}
+            attemptCount={exam.attemptCount}
+          />
         </div>
       </div>
     </div>
-  );
-}
-
-function MenuItem({
-  icon,
-  label,
-  onClick,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="menuitem"
-      onClick={onClick}
-      className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12.5px] text-ink-soft hover:bg-line-soft"
-    >
-      {icon}
-      {label}
-    </button>
   );
 }

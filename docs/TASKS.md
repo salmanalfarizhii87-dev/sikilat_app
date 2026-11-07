@@ -415,21 +415,51 @@ Semua task di fase ini diverifikasi lewat `db lint` + uji HTTP ke Data API.
   - Cakupan: tombol tambah/hapus/urutkan memanggil aksi dari Fase 4; impor CSV memakai route handler T4.9.
   - Selesai bila: publish langsung dari wizard menghasilkan soal di database dengan urutan benar.
 
-- [ ] **T3.5: Daftar ujian: server-side cari/filter/paginasi** `P0` `M`
+- [x] **T3.5: Daftar ujian: server-side cari/filter/paginasi** `P0` `M`
   - Cakupan: `src/app/admin/(panel)/exams/page.tsx` + aksi cepat (salin kode, salin tautan, duplikat, arsip) berfungsi.
   - Selesai bila: filter `archived` dan pencarian bertahan di URL (`?search=&status=&page=`).
+  - **Selesai.** Halaman jadi Server Component; `listExams` + `getExamStatusCounts` jalan paralel.
+    Komponen klien: `exams/exam-filters.tsx` (cari dengan jeda 300 ms, chip status, paginasi) dan
+    `exams/exam-row-menu.tsx` (salin tautan, duplikat, arsip, hapus). Semua keadaan di URL;
+    `router.replace` supaya tiap ketikan tidak menambah riwayat.
+  - Diverifikasi 23/23 skenario peramban (Playwright): cari masuk URL, hasil kosong + tombol reset,
+    filter `archived`, search+status hidup bersama, duplikat, arsip, hapus, keadaan akhir.
+    Paginasi diuji dengan 24 ujian sementara (25 total): hal 1 = 1–20, hal 2 = 21–25,
+    filter dari hal 2 membuang `page`. Tampilan 390 px: tanpa scroll horizontal, tautan judul 280×44 px.
+  - **Bug ditemukan saat uji:** `?page=999` menghasilkan **HTTP 500**. PostgREST membalas
+    `416 Requested range not satisfiable` bila offset awal melewati jumlah baris, dan `listExams`
+    meneruskannya sebagai error. Diperbaiki: kode `PGRST103` ditangkap, total dihitung ulang, lalu
+    halaman terakhir diambil; `page` yang dikembalikan adalah halaman yang benar-benar tampil
+    sehingga indikator "2 / 2" tidak bertentangan dengan isi tabel.
+  - Dua kegagalan awal uji ternyata artefak waktu, bukan bug: `fill()` dijalankan sebelum React
+    selesai hidrasi (~1,5 dtk pada kompilasi pertama) sehingga nilai dikembalikan ke `""`. Uji
+    sekarang menunggu fiber React menempel (`__reactFiber$`) sebelum menyentuh input.
 
-- [ ] **T3.6: Ringkasan ujian: buka/tutup/perpanjang/ganti kode** `P0` `M`
-  - Cakupan: `openExamNow`, `closeExamNow`, `extendCloseTime`, `regenerateExamCode` (EXM-03, EXM-12) + konfirmasi.
-  - Selesai bila: kode lama langsung tidak ditemukan setelah diganti, attempt berjalan tetap lanjut.
-
-- [ ] **T3.7: Duplikat dan arsip** `P1` `M`
+- [x] **T3.7: Duplikat dan arsip** `P1` `M`
   - Cakupan: `duplicateExam` menyalin soal + opsi + pengaturan dengan kode baru (EXM-10); `archiveExam` (EXM-13).
   - Selesai bila: ujian duplikat muncul sebagai `draft` dengan 0 attempt.
+  - **Selesai.** Migrasi `20261107001500_rpc_duplicate_exam.sql`: `duplicate_exam(uuid)` — satu
+    fungsi, bukan rangkaian panggilan, karena menyalin tiga tabel sambil memetakan ID lama→baru
+    hanya bisa benar dalam satu transaksi. Kolom disalin satu per satu (`select *` akan ikut
+    menyalin `results_released_at`, membuat duplikat menganggap hasilnya sudah dirilis).
+    Aksi: `duplicateExam`, `archiveExam`, `unarchiveExam`.
+  - RPC diuji 29/29: kode baru 6 karakter bersih, 12 soal + 40 opsi tersalin, **pola kunci jawaban
+    per soal identik** dan menunjuk opsi baru, `results_released_at` tidak tersalin, 0 attempt,
+    audit tercatat, `anon` ditolak (42501), id ngawur → `NOT_FOUND`.
+  - `unarchiveExam` mengembalikan ke `draft`, bukan `published`: mengaktifkan ulang ujian lama tanpa
+    melewati pemeriksaan EXM-08 bisa menghasilkan ujian aktif yang tidak bisa dikerjakan.
 
-- [ ] **T3.8: Hapus permanen dengan konfirmasi judul** `P1` `S`
+- [x] **T3.8: Hapus permanen dengan konfirmasi judul** `P1` `S`
   - Cakupan: modal meminta mengetik judul ujian; `deleteExam` menolak bila ada attempt dan bukan arsip; catat `audit_logs`.
   - Selesai bila: mengetik judul salah membuat tombol tetap nonaktif.
+  - **Selesai.** Tiga penjagaan di server (bukan hanya UI): konfirmasi judul, harus berstatus
+    `archived`, dan harus 0 attempt. Perbandingan judul memakai bentuk ternormalisasi
+    (trim + huruf kecil + spasi dirapikan) sehingga salah kapital tidak menghukum admin.
+    Menu hanya menampilkan "Hapus permanen" untuk arsip tanpa attempt.
+  - Diverifikasi di peramban: tombol nonaktif saat kosong, tetap nonaktif saat judul salah, aktif
+    saat judul benar meski kapitalisasi berbeda, dan baris hilang setelah `router.refresh()`.
+    `audit_logs` mencatat rantai `duplicate_exam → archive_exam → delete_exam` dengan `entity_id`
+    yang tetap menunjuk ujian yang sudah tidak ada — justru itu gunanya.
 
 - [ ] **T3.9: Penguncian setelah attempt pertama (EXM-09)** `P0` `M`
   - Cakupan: aksi soal menolak perubahan isi/poin bila `exists(attempts)`; UI read-only; metadata yang diizinkan tetap bisa diubah; `locked` di halaman soal dihitung dari data, bukan `const locked = true`.
