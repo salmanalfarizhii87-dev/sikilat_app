@@ -94,6 +94,7 @@ Kerjakan bagian ini sebelum Fase 1. Masing-masing kecil, tapi memblokir task lai
 - [ ] **T0.0: Provisioning Supabase Cloud** `P0` `S`
   - Cakupan: dua project di Supabase Cloud (organisasi gratis): **`sikilat-dev`** dan **`sikilat-prod`**, keduanya region **Southeast Asia (Singapore) `ap-southeast-1`**. Simpan password database di pengelola kata sandi. Matikan **Allow new users to sign up** di Authentication → Providers → Email pada kedua project. Isi **Site URL** dan **Redirect URLs** dengan domain Vercel (prod) dan `http://localhost:3000` (dev).
   - Batasan free plan yang harus diterima: 500 MB database, 1 GB storage, **tanpa backup otomatis**, project **di-pause setelah 7 hari tanpa aktivitas**, maksimal 2 project aktif. Mitigasi: keep-alive terjadwal + backup `pg_dump` lewat GitHub Actions (task T0.10).
+  - **Status: menunggu tindakan pemilik project** — pembuatan project hanya bisa dilakukan lewat dashboard Supabase (butuh login akun). Langkah lengkap: `docs/PROVISIONING-SUPABASE.md`.
   - Selesai bila: kedua project berstatus `ACTIVE_HEALTHY`, signup publik tertutup, dan URL + anon key sudah tercatat di `.env.local` (tidak di-commit).
 
 - [x] **T0.1: Pasang dependensi yang disebut PRD** `P0` `S`
@@ -117,14 +118,22 @@ Kerjakan bagian ini sebelum Fase 1. Masing-masing kecil, tapi memblokir task lai
 - [ ] **T0.3: Supabase CLI dan folder proyek** `P0` `S`
   - Cakupan: `npx supabase init` (sudah dijalankan), `supabase/config.toml` disesuaikan (bucket `question-media` privat ≤2 MB, `enable_signup = false`, `site_url`), `npx supabase link --project-ref <ref-dev>`, dan `supabase/migrations/` sebagai **satu-satunya sumber skema**.
   - Catatan penting: CLI 3.0.0 bisa dipakai **tanpa Docker** untuk `init`, `link`, `db push`, `db lint`, `gen types --remote`, dan `test db --remote` (pgTAP). Yang tetap butuh Docker hanya `db dump`, `db reset`, dan `start` — karena itu tidak ada development lokal berbasis kontainer; pengembangan memakai project cloud `sikilat-dev`.
+  - **Hasil (7 November 2026):** `supabase init` dijalankan, `supabase/config.toml` disesuaikan: bucket `question-media` (privat, `2MiB`, `image/jpeg|png|webp`), `enable_signup = false`, `site_url`/`additional_redirect_urls` = `http://localhost:3000`. Folder `supabase/migrations/` dibuat. `supabase` CLI 3.0.0 ditambahkan ke devDependencies, skrip npm: `db:push`, `db:push:dry`, `db:types`, `db:lint`, `db:test` (semua memakai `--remote`; flag `--linked` sudah dihapus di CLI 3.0.0).
+  - **Belum selesai:** `supabase link` menunggu project dev dibuat (T0.0).
   - Selesai bila: `npx supabase db push --dry-run` berhasil terhubung ke project dev (belum ada migrasi = tidak ada perubahan), dan `supabase/migrations/` ada.
 
-- [ ] **T0.4: Tiga klien Supabase** `P0` `S`
+- [x] **T0.4: Tiga klien Supabase** `P0` `S`
   - Cakupan: `lib/supabase/client.ts` (browser, `createBrowserClient`), `lib/supabase/server.ts` (`createServerClient` + `cookies()` async, untuk Server Component/Action/Route Handler), `lib/supabase/admin.ts` (`createClient` dengan service role, `import "server-only"`).
   - Selesai bila: impor `admin.ts` dari komponen klien menyebabkan build error, bukan kebocoran kunci.
+  - **Hasil (7 November 2026):** tiga klien dibuat dan **dibuktikan** aman lewat uji yang disengaja: halaman klien sementara yang mengimpor `admin.ts` membuat `next build` **gagal** dengan `'server-only' cannot be imported from a Client Component module`. Halaman uji dihapus, build kembali hijau.
+    - `client.ts` sengaja tidak menyimpan instance sendiri; `createBrowserClient` dari `@supabase/ssr` sudah menyimpan satu instance per tab, jadi menyimpannya lagi akan memicu peringatan "Multiple GoTrueClient instances".
+    - `server.ts` membungkus `setAll` dengan `try/catch` karena Server Component tidak boleh menulis cookie; refresh sesi ditangani `proxy.ts`, jadi kegagalan itu wajar.
+    - `admin.ts` memakai `persistSession: false` + `autoRefreshToken: false` (tidak ada sesi pengguna; kunci service role adalah identitasnya) dan mengambil env lewat `serverEnv()` sehingga pesan galatnya jelas bila belum diisi.
+    - Catatan: `tsc --noEmit` **tidak** menangkap pelanggaran `server-only`; hanya bundler yang menegakkannya. Karena itu verifikasinya harus lewat `next build`, bukan `tsc`.
 
 - [ ] **T0.5: Tipe database terbuat otomatis** `P0` `S`
   - Cakupan: skrip `npm run db:types` → `supabase gen types typescript --remote > src/types/database.types.ts` (memakai `--remote`, bukan `--local`, karena tidak ada Postgres lokal; di CLI 3.0.0 `--linked` sudah dihapus). Adapter `src/lib/types.ts` dipetakan dari tipe generated, bukan didefinisikan ulang.
+  - **Hasil sebagian (7 November 2026):** skrip `db:types` sudah terpasang. `src/types/database.types.ts` dibuat sebagai **placeholder sah** (skema kosong + helper `Tables`/`TablesInsert`/`TablesUpdate`/`Enums`) supaya `tsc` hijau dan tiga klien bisa dikompilasi sebelum database ada. Berkas ini akan ditimpa hasil generate sungguhan.
   - Selesai bila: `src/types/database.types.ts` ter-generate dari project dev, dan `Question.correctOptionIds` hanya dipakai di modul admin/server; tipe peserta memakai `PublicQuestion` tanpa kunci.
 
 - [ ] **T0.6: Restrukturisasi folder sesuai PRD §5.4** `P0` `M`

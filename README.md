@@ -48,6 +48,7 @@ dengan `npm run db:push`. Detailnya di
 |---|---|
 | [`docs/PRD-KilatCBT.md`](./docs/PRD-KilatCBT.md) | PRD v2.0 — **sumber tunggal** spesifikasi produk. Bila ada konflik dengan dokumen lain, PRD yang menang. |
 | [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | Di mana kode berjalan, di mana data disimpan, dan siapa boleh mengakses apa. |
+| [`docs/PROVISIONING-SUPABASE.md`](./docs/PROVISIONING-SUPABASE.md) | Langkah sekali-jalan membuat project Supabase Cloud (T0.0). |
 | [`docs/TASKS.md`](./docs/TASKS.md) | Daftar task turunan PRD, dipecah per sesi kerja dengan definisi "Selesai bila". |
 | [`DESIGN.md`](./DESIGN.md) | Panduan desain dan token visual. |
 
