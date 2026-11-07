@@ -232,7 +232,8 @@ aplikasi. Terbukti lewat computed style: `/` = `#f9fafb`, `/admin` = `#f7f6f2`, 
 halaman penuh, bukan transisi klien, karena Next.js memuat ulang saat berpindah root layout. Untuk
 alur ini justru diinginkan: peserta yang membuka tautan ujian sebaiknya mulai dari dokumen bersih.
 
-**Batas kepemilikan.** File di `(landing)/` disalin apa adanya dari project `landing_page_kilatcbt`
+**Batas kepemilikan.** File di `(landing)/` disalin apa adanya dari project terpisah
+`landing_page_kilatcbt` (kini sudah dihapus dari repo)
 dan **tidak boleh diubah** tanpa izin. Konsekuensinya folder itu dikecualikan dari ESLint, dan
 temuan aksesibilitasnya (kontras footer, target sentuh HP) dicatat sebagai keterbatasan yang
 diketahui, bukan diperbaiki diam-diam.

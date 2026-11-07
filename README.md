@@ -4,27 +4,11 @@ Platform ujian online (CBT) yang ringan: admin membuat ujian, peserta masuk
 cukup dengan kode ujian dan nama — **tanpa akun**. Pilihan ganda dinilai
 otomatis, esai dinilai manual oleh admin.
 
-Repo ini berisi aplikasi utama, landing page, dan dokumen produk.
+## Menjalankan
 
-## Isi Repo
-
-| Folder | Isi |
-|---|---|
-| [`kilatcbt/`](./kilatcbt) | Aplikasi utama (Next.js 16, App Router). Berisi rute peserta, rute admin, runner ujian, dan landing page di route group `(landing)`. |
-| [`landing_page_kilatcbt/`](./landing_page_kilatcbt) | Landing page standalone — sumber asli yang disalin ke `kilatcbt/`. Bisa dijalankan terpisah untuk preview. |
-| [`docs/`](./docs) | Dokumen produk: PRD dan daftar task eksekusi. |
-
-## Dokumentasi
-
-| Dokumen | Keterangan |
-|---|---|
-| [`docs/PRD-KilatCBT.md`](./docs/PRD-KilatCBT.md) | PRD v2.0 — **sumber tunggal** spesifikasi produk. Bila ada konflik dengan dokumen lain, PRD yang menang. |
-| [`docs/TASKS.md`](./docs/TASKS.md) | Daftar task turunan PRD, dipecah per sesi kerja dengan definisi "Selesai bila". |
-
-## Menjalankan Aplikasi
+Semua perintah dijalankan dari root repo:
 
 ```bash
-cd kilatcbt
 npm install
 npm run dev        # http://localhost:3000
 ```
@@ -33,16 +17,31 @@ Perintah lain:
 
 ```bash
 npm run build      # build produksi
+npm run start      # jalankan hasil build
 npm run lint       # eslint
 ```
 
-Untuk preview landing page secara terpisah:
+## Struktur
 
-```bash
-cd landing_page_kilatcbt
-npm install
-npm run dev
 ```
+.
+├── src/                  # kode aplikasi (Next.js App Router)
+│   ├── app/              # rute: peserta, admin, (landing)
+│   ├── components/       # komponen UI
+│   └── lib/              # util, tipe, data mock
+├── public/               # aset statis (logo, ilustrasi)
+├── assets/               # file sumber desain (logo mentah)
+├── scripts/              # skrip utilitas (trim logo)
+└── docs/                 # dokumen produk
+```
+
+## Dokumentasi
+
+| Dokumen | Keterangan |
+|---|---|
+| [`docs/PRD-KilatCBT.md`](./docs/PRD-KilatCBT.md) | PRD v2.0 — **sumber tunggal** spesifikasi produk. Bila ada konflik dengan dokumen lain, PRD yang menang. |
+| [`docs/TASKS.md`](./docs/TASKS.md) | Daftar task turunan PRD, dipecah per sesi kerja dengan definisi "Selesai bila". |
+| [`DESIGN.md`](./DESIGN.md) | Panduan desain dan token visual. |
 
 ## Alur Singkat
 
@@ -57,7 +56,7 @@ Next.js 16 · React 19 · TypeScript · Tailwind CSS v4 · Supabase (auth & data
 
 ## Aset
 
-Ilustrasi fitur dan logo berada di [`kilatcbt/public/`](./kilatcbt/public):
+Ilustrasi fitur dan logo berada di `public/`:
 
 | File | Ilustrasi |
 |---|---|
@@ -66,6 +65,13 @@ Ilustrasi fitur dan logo berada di [`kilatcbt/public/`](./kilatcbt/public):
 | `jawaban-tidak-hilang.png` | Jawaban aman saat koneksi putus |
 | `tanpa-akun.png` | Peserta tanpa akun |
 | `logo-sikilat.png` | Logo produk |
+
+Logo di `public/` adalah hasil trim dari `assets/logo_sikilat.png`. Kalau logo
+diganti, jalankan ulang:
+
+```bash
+node scripts/trim-logo.cjs
+```
 
 ## Status
 

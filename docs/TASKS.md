@@ -56,7 +56,8 @@ Bagian ini bukan task. Fungsinya mencegah pengulangan pekerjaan yang sudah seles
 | Landing page 100% asli | `page.tsx`, `globals.css`, `layout.tsx`, `icon.png`, `logo-sikilat.png` identik MD5 dengan project sumber |
 | 404 global | `/kode-salah` mengembalikan 404, judul "Halaman tidak ditemukan · KilatCBT", tampil dengan tema aplikasi |
 
-**Catatan landing page.** Landing page disalin apa adanya dari `landing_page_kilatcbt/` dan
+**Catatan landing page.** Landing page disalin apa adanya dari project terpisah
+`landing_page_kilatcbt` (kini sudah dihapus dari repo) dan
 ditempatkan di route group `(landing)` dengan root layout sendiri, sehingga CSS-nya tidak pernah
 dimuat bersama CSS aplikasi. Konsekuensinya folder itu punya 9 temuan lint (`<a>` untuk tautan
 internal, `setState` di dalam effect), 48 teks footer dengan kontras 4.39:1 (di bawah AA), dan 8

@@ -3,19 +3,19 @@
  *
  * Pakai: node scripts/trim-logo.cjs
  *
- * Sumber  : logo_sikilat.png (di root project, file asli dari desainer)
- * Output 1: public/logo-sikilat.png  → logo sudah di-trim, dipakai <Image />
- * Output 2: app/icon.png             → favicon Next.js (512×512)
+ * Sumber  : assets/logo_sikilat.png        (file asli dari desainer)
+ * Output 1: public/logo-sikilat.png        → logo sudah di-trim, dipakai <Image />
+ * Output 2: src/app/(landing)/icon.png     → favicon Next.js (512×512)
  *
- * Jalankan ulang skrip ini setiap kali logo_sikilat.png diganti.
+ * Jalankan ulang skrip ini setiap kali assets/logo_sikilat.png diganti.
  */
 
 const sharp = require("sharp");
 const fs = require("fs");
 
-const SRC = "logo_sikilat.png";
+const SRC = "assets/logo_sikilat.png";
 const OUT_LOGO = "public/logo-sikilat.png";
-const OUT_ICON = "app/icon.png";
+const OUT_ICON = "src/app/(landing)/icon.png";
 
 /** padding di sekeliling isi logo, dalam piksel kanvas hasil trim */
 const LOGO_PAD = 12;
