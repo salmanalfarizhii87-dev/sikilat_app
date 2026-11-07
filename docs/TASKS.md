@@ -376,13 +376,36 @@ Semua task di fase ini diverifikasi lewat `db lint` + uji HTTP ke Data API.
 
 ## Fase 3: Pengelolaan ujian (M2)
 
-- [ ] **T3.1: Modul `features/exams`: schema, tipe, query** `P0` `M`
+- [x] **T3.1: Modul `features/exams`: schema, tipe, query** `P0` `M`
   - Cakupan: Zod untuk semua field EXM-02/04/05/06, `listExams({page,pageSize,search,status})` → `{rows,total,page,pageSize}`, `getExam(id)`, `getExamByCode(code)` (tanpa kunci).
-  - Selesai bila: query key mengikuti konvensi PRD §5.7.
+  - File: `src/features/exams/{types,schemas,queries,datetime}.ts`.
+  - **Hasil (7 November 2026):** query key mengikuti PRD §5.7 — `['exams', {page,pageSize,search,status}]`, `['exam', examId]`, `['exam', examId, 'questions']`, plus `['exams','counts']`. `['exams']` sengaja menjadi prefiks agar satu `invalidateQueries` membatalkan semua kombinasi filter.
+    - Tipe **tidak** memakai `Exam` dari `src/lib/types.ts`: model demo itu menyatakan `subjectLabel`/`instructions`/`passingScore` wajib, padahal di database ketiganya `NULL`-able. `passing_score = NULL` berarti "tanpa KKM", sedangkan `0` berarti **semua peserta lulus** — memaksa `NULL` menjadi `0` akan membalik arti data.
+    - **Empat bug tertangkap saat uji, bukan saat dibaca:**
+      1. `match.map(Number)` pada hasil regex membuat grup detik yang tidak ada menjadi `NaN`, sehingga **semua** jadwal tanpa detik (`07:30`) ditolak. Diperbaiki dengan mengurai grup satu per satu.
+      2. `z.coerce.number()` mengubah `""` menjadi **0**, jadi mengosongkan kolom KKM diam-diam berarti "semua lulus". Ditambahkan `preprocess` yang memetakan `""`/`null` → `null`.
+      3. `*` adalah wildcard `ILIKE` versi PostgREST. Tanpa di-escape, mencari `*` mengembalikan **semua** ujian. Sekarang `\`, `%`, `_`, dan `*` semuanya di-escape.
+      4. `search` dengan `.max(100).catch("")` membuang pencarian 101 karakter menjadi **tanpa filter** — pengguna melihat semua ujian dan menyimpulkan pencarian rusak. Sekarang dipotong 100 karakter.
+    - `getExamByCode` memakai service role (peran `anon` tidak punya GRANT) dan **memilih kolom satu per satu**; `select("*")` di sana akan mengirim `created_by` ke peramban peserta. Draft mengembalikan `null`, bukan "belum dibuka", supaya keberadaan draft tidak bocor lewat kode yang bisa ditebak.
+  - **Terverifikasi terhadap PostgREST dan Zod yang sebenarnya (bukan asumsi):**
+    - 15 kasus pencarian diuji langsung: `MAT`/`ipa`/`Contoh` → 1 baris; `%`, `_`, `,`, `(`, `)`, `"`, `\`, `*`, `a b`, `tidakada` → 0 baris tanpa galat parser.
+    - `count: "exact"` + `head: true` mengembalikan angka per status; `range()` + dua `order` memberi `total` dan `rows` yang benar; agregat `questions(count)`/`attempts(count)` mengembalikan 12 soal dan 0 attempt untuk `CONTOH1`.
+    - 20 kasus konversi waktu lulus, dicek silang dengan `Intl` zona `Asia/Jakarta`: `07:30` WIB → `00:30Z`, tengah malam → hari sebelumnya, 31 Feb ditolak, `25:00` ditolak, roundtrip utuh, lintas tahun benar.
+    - 60+ kasus Zod: EXM-08 (tutup sebelum/sama dengan buka ditolak, pesan menunjuk `closesAt`), KKM `null` vs `0` vs `101` vs `abc`, batas durasi/percobaan, alfabet kode (`0/O/1/I` ditolak), `deleteExamSchema`, `extendCloseSchema`, dan normalisasi parameter URL (`page=0`→1, `pageSize=999999`→20, `status=ngawur`→`all`).
 
-- [ ] **T3.2: Aksi draft dan publish** `P0` `M`
+- [x] **T3.2: Aksi draft dan publish** `P0` `M`
   - Cakupan: `createExamDraft`, `updateExam`, `publishExam`, `unpublishExam`; validasi EXM-08 (≥1 soal, poin > 0, durasi > 0, jadwal valid); kode 6 karakter unik otomatis.
-  - Selesai bila: publish dengan 0 soal mengembalikan `VALIDATION` + daftar masalah.
+  - File: `src/features/exams/actions.ts`, migrasi `20261107001400_rpc_audit_log.sql`.
+  - **Hasil (7 November 2026):** publish dengan 0 soal mengembalikan `VALIDATION` + `fields.questions` — **terpenuhi**, diverifikasi lewat HTTP.
+    - **Audit log butuh RPC baru.** Policy di migrasi 0004 sengaja hanya memberi `select` pada `audit_logs` untuk `authenticated`: kalau admin bisa menulis langsung, admin juga bisa memalsukan atau menghapus jejak auditnya sendiri. Karena itu ditambahkan `log_admin_action()` (SECURITY DEFINER + `assert_admin()`), dan **dibuktikan** bahwa `insert` langsung ke `audit_logs` ditolak `42501` sementara RPC berhasil.
+    - **`extendCloseTime` bertumpu pada `closes_at` yang berlaku, bukan `now()`.** Kalau memakai `now()`, memperpanjang 30 menit pada ujian yang tutupnya masih dua jam lagi justru **memperpendek** jadwal. Diuji: perpanjangan pertama 45 menit, kedua menambah tepat 30 menit di atas hasil pertama.
+    - **`openExamNow` mengosongkan `closes_at`.** Kalau jadwal tutup dibiarkan di masa lalu, ujian langsung tertutup lagi dan tombolnya tampak tidak bekerja. Diuji: `closesAt` menjadi `null` setelah dibuka.
+    - **`closeExamNow` tidak mengubah status.** Ujian tetap `published`; penolakan peserta datang dari jadwal, bukan dari status — supaya ujian tidak hilang dari daftar aktif hanya karena waktunya habis.
+    - `publishExam` dan `openExamNow` sama-sama memeriksa EXM-08 terhadap data **di database**, bukan data di layar: wizard bisa menampilkan 10 soal yang belum tersimpan.
+    - Jadwal yang seluruhnya sudah lewat ikut ditolak saat publish (bukan bagian EXM-08, tetapi hampir pasti salah isi).
+    - `examHasAttempts` sengaja diletakkan di `queries.ts`, bukan `actions.ts`: setiap ekspor berkas `"use server"` menjadi endpoint yang bisa dipanggil peramban, dan pemeriksaan baca-saja tidak perlu menjadi endpoint. Bila hitungan gagal, hasilnya **`true` (terkunci)** — gagal menghitung tidak boleh membuka soal ujian yang sedang berjalan.
+  - **Terverifikasi lewat HTTP dengan cookie admin asli** (route uji sementara yang memanggil Server Action sesungguhnya, lalu dihapus): **31/31 lulus**, mencakup — tanpa cookie → `UNAUTHENTICATED`; draft dibuat dengan kode 6 karakter dari alfabet bersih; publish 0 soal → `VALIDATION` + `fields.questions`; publish dengan soal → `published`; publish dua kali → `CONFLICT`; peserta melihat ujian published (dan **tidak** menerima `createdBy`); `examHasAttempts` `false` → `start_attempt` → `true`; instruksi tetap bisa diubah walau sudah ada attempt (EXM-09); `unpublishExam` → `draft` dan peserta tidak lagi melihatnya; `regenerateExamCode` (kode lama langsung hilang, kode sama/bentrok → `CONFLICT`, `0/O/1/I` → `VALIDATION`); id ngawur → `NOT_FOUND`; dan **7 aksi tercatat lengkap di `audit_logs`** dengan `actor_id` admin yang benar.
+  - Data uji dihapus setelah pengujian; DB kembali: 1 ujian, 12 soal, 40 opsi, 0 attempt, 0 audit_logs.
 
 - [ ] **T3.3: Wizard terhubung ke server** `P0` `L`
   - Cakupan: `src/app/admin/(panel)/exams/new/page.tsx` berhenti memakai `kilat_exam_draft_v1`; draft disimpan ke baris `exams` berstatus `draft`; autosave per langkah; pulihkan draft saat dibuka lagi.

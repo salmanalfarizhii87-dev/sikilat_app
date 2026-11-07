@@ -510,6 +510,16 @@ export type Database = {
         Returns: undefined
       }
       is_admin: { Args: never; Returns: boolean }
+      log_admin_action: {
+        Args: {
+          p_action: string
+          p_after?: Json
+          p_before?: Json
+          p_entity: string
+          p_entity_id: string
+        }
+        Returns: undefined
+      }
       log_attempt_event: {
         Args: { p_meta?: Json; p_token_hash: string; p_type: string }
         Returns: undefined
