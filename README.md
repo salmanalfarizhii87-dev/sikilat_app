@@ -10,7 +10,8 @@ Semua perintah dijalankan dari root repo:
 
 ```bash
 npm install
-npm run dev        # http://localhost:3000
+cp .env.example .env.local   # lalu isi dari dashboard Supabase (project sikilat-dev)
+npm run dev                  # http://localhost:3000
 ```
 
 Perintah lain:
@@ -21,6 +22,11 @@ npm run start      # jalankan hasil build
 npm run lint       # eslint
 ```
 
+Database memakai **Supabase Cloud**, bukan Postgres lokal — tidak perlu Docker.
+Perubahan skema ditulis sebagai migrasi di `supabase/migrations/` lalu didorong
+dengan `npm run db:push`. Detailnya di
+[`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
+
 ## Struktur
 
 ```
@@ -29,6 +35,7 @@ npm run lint       # eslint
 │   ├── app/              # rute: peserta, admin, (landing)
 │   ├── components/       # komponen UI
 │   └── lib/              # util, tipe, data mock
+├── supabase/             # migrasi SQL + config CLI (sumber kebenaran skema)
 ├── public/               # aset statis (logo, ilustrasi)
 ├── assets/               # file sumber desain (logo mentah)
 ├── scripts/              # skrip utilitas (trim logo)
@@ -40,6 +47,7 @@ npm run lint       # eslint
 | Dokumen | Keterangan |
 |---|---|
 | [`docs/PRD-KilatCBT.md`](./docs/PRD-KilatCBT.md) | PRD v2.0 — **sumber tunggal** spesifikasi produk. Bila ada konflik dengan dokumen lain, PRD yang menang. |
+| [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | Di mana kode berjalan, di mana data disimpan, dan siapa boleh mengakses apa. |
 | [`docs/TASKS.md`](./docs/TASKS.md) | Daftar task turunan PRD, dipecah per sesi kerja dengan definisi "Selesai bila". |
 | [`DESIGN.md`](./DESIGN.md) | Panduan desain dan token visual. |
 
@@ -52,7 +60,10 @@ npm run lint       # eslint
 
 ## Stack
 
-Next.js 16 · React 19 · TypeScript · Tailwind CSS v4 · Supabase (auth & database) · Zod · React Hook Form
+Next.js 16 · React 19 · TypeScript · Tailwind CSS v4 · Supabase Cloud (Auth, PostgreSQL, Storage) · Zod · React Hook Form
+
+Aplikasi di **Vercel** (Hobby, non-komersial), database di **Supabase Cloud** (Free,
+region Singapura), kode di GitHub. Tidak ada VPS, Docker, atau backend terpisah.
 
 ## Aset
 

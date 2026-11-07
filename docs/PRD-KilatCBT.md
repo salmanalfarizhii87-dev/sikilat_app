@@ -166,14 +166,14 @@ Stack dipertahankan dari JawaraCBT agar tidak ada keputusan teknis baru, dengan 
 | Bahasa | **TypeScript** |
 | Styling | **Tailwind CSS** |
 | Data fetching dan cache klien | **TanStack Query** (v5) |
-| Backend terkelola | **Supabase**: Auth (hanya admin), PostgreSQL, Storage |
+| Backend terkelola | **Supabase Cloud**: Auth (hanya admin), PostgreSQL, Storage — tanpa self-hosting |
 | Klien Supabase untuk SSR | `@supabase/supabase-js` + `@supabase/ssr` |
 | Validasi skema | Zod |
 | Form | React Hook Form + `@hookform/resolvers` |
 | Komponen UI | shadcn/ui (Radix UI) + Lucide Icons |
 | Grafik | Recharts (histogram nilai, statistik) |
 | Parsing CSV/XLSX | PapaParse / SheetJS (di server) |
-| Hosting | Vercel (atau Node server/Docker) |
+| Hosting | **Vercel** (Hobby, non-komersial) — tanpa Node server atau Docker sendiri |
 | Pengujian | Vitest, Testing Library, Playwright, k6 |
 
 > **Catatan Next.js 16 (verifikasi di dokumentasi resmi sebelum coding):** konvensi `middleware.ts` diganti namanya menjadi `proxy.ts`; `params` dan `searchParams` bersifat asinkron (`await params`); Turbopack menjadi bundler default; caching bersifat opt-in (mis. direktif `"use cache"`).
@@ -347,6 +347,8 @@ Hanya satu bucket yang tersisa (bucket `avatars`, `student-documents`, dan `impo
 
 Path konvensi: `question-media/{exam_id}/{uuid}.{ext}`. File CSV/XLSX impor soal diproses di memori server dan tidak disimpan.
 
+**Kebijakan akses (diputuskan):** tidak ada policy `select` pada `storage.objects` untuk peran `anon` maupun `authenticated`. RLS Storage tetap aktif tanpa policy baca, sehingga objek tidak dapat diakses langsung meski seseorang mengetahui path-nya. Satu-satunya jalan adalah `createSignedUrl()` dari server memakai service role, diterbitkan hanya saat attempt aktif dan dengan masa berlaku pendek. Admin mengunggah lewat Server Action (bukan langsung dari browser), sehingga tidak perlu policy `insert` untuk `authenticated`.
+
 ### 5.9 Alur pelaksanaan ujian (urutan)
 
 ```mermaid
@@ -394,7 +396,7 @@ APP_TIMEZONE=Asia/Jakarta
 - Semua input divalidasi Zod di server; validasi klien hanya untuk UX.
 - Service-role hanya diimpor dari `lib/supabase/admin.ts` yang diberi `import 'server-only'`.
 - Kunci jawaban (`is_correct`, `reference_answer`, `explanation`) tidak pernah di-`select` oleh RPC peserta kecuali pada hasil yang diizinkan visibilitasnya.
-- **Rate limiting** pada login admin, `startAttempt`, dan `resumeAttempt` (berbasis IP + kode ujian; implementasi bisa tabel Postgres atau layanan seperti Upstash).
+- **Rate limiting** pada login admin, `startAttempt`, dan `resumeAttempt` (berbasis IP + kode ujian). **Diputuskan: tabel Postgres** (`rate_limits`) dengan fungsi RPC atomik, tanpa layanan eksternal seperti Upstash.
 - Header keamanan (CSP, `X-Frame-Options`, `Referrer-Policy`) lewat konfigurasi Next.js.
 - Teks soal dan nama peserta di-*escape*/disanitasi saat dirender untuk mencegah XSS.
 - Audit log untuk aksi sensitif admin: ubah nilai, reset attempt, hapus data.
@@ -460,7 +462,7 @@ Soal **dimiliki langsung oleh satu ujian** (tidak ada bank soal lintas ujian).
 | QST-03 | **Poin per soal** (default 1, boleh desimal) | P0 |
 | QST-04 | Teks soal dengan format dasar (tebal, miring, daftar) dan **lampiran gambar** pada soal/opsi | P0 |
 | QST-05 | Urutkan ulang soal dengan drag-and-drop | P1 |
-| QST-06 | Tipe pilihan ganda **banyak jawaban** dengan mode skor: semua-benar / parsial | P1 |
+| QST-06 | Tipe pilihan ganda **banyak jawaban** dengan skor **semua-benar** (mode parsial tidak termasuk lingkup) | P1 |
 | QST-07 | **Impor soal dari CSV/XLSX**: unduh template, unggah, pratinjau validasi, laporan error per baris (Bagian 8.4) | P1 |
 | QST-08 | Pembahasan per soal (tampil sesuai visibilitas hasil) | P1 |
 | QST-09 | Kunci/rubrik acuan untuk essay (hanya terlihat admin) | P1 |
@@ -702,6 +704,18 @@ create table audit_logs (                             -- SYS-03
   after_data  jsonb,
   created_at  timestamptz not null default now()
 );
+
+-- ============ RATE LIMIT (K2: tabel Postgres, tanpa Upstash) ============
+-- Kunci gabungan: aksi + identitas pemanggil (mis. 'login_admin' + IP,
+-- 'start_attempt' + kode ujian). Satu baris per jendela waktu.
+create table rate_limits (
+  bucket       text not null,                        -- 'login_admin', 'start_attempt', ...
+  identifier   text not null,                        -- IP, kode ujian, atau gabungan
+  window_start timestamptz not null,                 -- awal jendela (dibulatkan)
+  counter      integer not null default 0,
+  blocked_until timestamptz,                         -- null = belum diblokir
+  primary key (bucket, identifier, window_start)
+);
 ```
 
 ### 7.4 Indeks yang disarankan
@@ -736,6 +750,9 @@ alter table attempts        enable row level security;
 alter table attempt_answers enable row level security;
 alter table attempt_events  enable row level security;
 alter table audit_logs      enable row level security;
+-- rate_limits: RLS aktif TANPA policy. Hanya service_role (yang melewati RLS)
+-- yang boleh menyentuhnya; klien tidak pernah memanggilnya langsung.
+alter table rate_limits     enable row level security;
 
 -- Satu pola policy untuk semua tabel: hanya admin aktif
 create policy admin_all on exams
@@ -769,6 +786,7 @@ grant  execute on function public.start_attempt(text, text, text, text, text, te
 - Tabel `questions` dan `question_options` memuat kunci (`is_correct`, `reference_answer`, `explanation`). Karena `anon` dan `authenticated` non-admin tidak punya policy, mereka **tidak bisa membaca apa pun** dari tabel ini. Peserta menerima soal **hanya lewat RPC** yang memilih kolom tanpa kunci.
 - Peserta tidak punya akses tulis langsung ke `attempt_answers`; semua penulisan lewat RPC `save_answer` agar tidak bisa mengisi `points_awarded` atau `is_correct` sendiri.
 - Jangan pernah menambahkan policy `select` untuk `anon` pada tabel di atas, dan jangan menyalakan *Data API* untuk skema lain yang memuat data ujian.
+- **Storage `question-media`:** RLS aktif tanpa policy untuk `anon`/`authenticated` (K9). Jangan menambahkan policy baca "supaya gambar cepat tampil" — itu membuka seluruh gambar soal ke siapa pun yang tahu path-nya. Signed URL diterbitkan server saat attempt aktif.
 - Uji RLS dan RPC secara otomatis (Bagian 12): `anon` tidak boleh membaca satu baris pun dan tidak boleh memanggil RPC admin.
 
 ### 7.6 Fungsi RPC (SECURITY DEFINER)
@@ -804,8 +822,8 @@ grant  execute on function public.start_attempt(text, text, text, text, text, te
 
 ```text
 Skor PG single   = poin_soal  jika opsi terpilih == kunci, selain itu 0
-Skor PG multiple = mode "semua benar": poin_soal jika himpunan terpilih == himpunan kunci
-                   mode "parsial"   : poin_soal * max(0, (benar_dipilih - salah_dipilih) / jumlah_kunci)
+Skor PG multiple = poin_soal  jika himpunan terpilih == himpunan kunci, selain itu 0
+                   (diputuskan: hanya mode "semua benar"; tidak ada mode parsial)
 Skor essay       = nilai manual admin (0 .. poin_soal)
 
 total_skor   = Σ skor semua soal
@@ -1041,7 +1059,7 @@ Draft tersimpan otomatis; admin dapat berhenti dan melanjutkan.
 
 | Lapisan | Alat | Cakupan |
 |---|---|---|
-| **Unit** | Vitest | Rumus penilaian (PG single/multiple, parsial, essay), normalisasi nama, pembuatan kode, validasi Zod, parser impor CSV |
+| **Unit** | Vitest | Rumus penilaian (PG single/multiple semua-benar, essay), normalisasi nama, pembuatan kode, validasi Zod, parser impor CSV |
 | **Komponen** | Testing Library | Timer, navigasi soal, indikator autosave, dialog Kumpulkan |
 | **RLS dan RPC** | Vitest + klien Supabase lokal | `anon` tidak dapat `select` dari tabel mana pun; `anon` tidak dapat memanggil RPC admin atau RPC peserta secara langsung; token milik attempt A tidak dapat membaca/menulis attempt B; admin nonaktif ditolak; kunci jawaban tidak muncul pada keluaran `get_attempt_state` |
 | **End-to-end** | Playwright | Admin: login → buat ujian → impor soal → publish. Peserta: buka tautan → isi nama → kerjakan → refresh di tengah ujian → submit → lihat hasil. Admin: nilai essay → lihat rekap → ekspor |
@@ -1090,13 +1108,14 @@ Draft tersimpan otomatis; admin dapat berhenti dan melanjutkan.
 
 ### 15.1 Langkah awal
 
-1. Buat proyek **Supabase** dan jalankan migrasi (`supabase/migrations`).
-2. Buat akun admin pertama di **Supabase Auth**, lalu tambahkan barisnya ke tabel `admins` (lewat `seed.sql` atau SQL manual).
+1. Buat **dua project Supabase Cloud** (`sikilat-dev`, `sikilat-prod`) di region `ap-southeast-1`, lalu jalankan migrasi dari `supabase/migrations` dengan `supabase db push`. Tidak ada Supabase self-hosted, VPS, atau Docker.
+2. Buat akun admin pertama di **Supabase Auth**, lalu tambahkan barisnya ke tabel `admins` (lewat `seed.sql` atau SQL manual). Tutup pendaftaran publik (Authentication → Providers → Email → matikan *Allow new users to sign up*).
 3. Pastikan RLS aktif di semua tabel dan RPC peserta hanya dapat dieksekusi `service_role` (Bagian 7.5).
-4. Buat bucket Storage `question-media` (privat).
-5. Deploy aplikasi ke **Vercel** (atau Node/Docker), isi variabel lingkungan (Bagian 5.10); `SUPABASE_SERVICE_ROLE_KEY` hanya sebagai variabel server.
+4. Buat bucket Storage `question-media` (privat, tanpa policy baca untuk `anon`/`authenticated`; akses hanya lewat signed URL dari server).
+5. Deploy aplikasi ke **Vercel**, isi variabel lingkungan (Bagian 5.10); `SUPABASE_SERVICE_ROLE_KEY` hanya sebagai variabel server.
 6. Jadwalkan `expire_overdue_attempts()` tiap menit (`pg_cron` atau Edge Function).
-7. (Opsional) pasang domain sendiri, mis. `kilatcbt.<domain>`.
+7. Pasang **keep-alive** dan **backup `pg_dump`** lewat GitHub Actions. Wajib: paket Free tidak menyediakan backup otomatis dan mem-pause project setelah 7 hari tanpa aktivitas.
+8. (Opsional) pasang domain sendiri, mis. `kilatcbt.<domain>`.
 
 ### 15.2 Checklist sebelum ujian pertama
 

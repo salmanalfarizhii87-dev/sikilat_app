@@ -6,7 +6,12 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "db:types": "supabase gen types typescript --remote > src/types/database.types.ts",
+    "db:push": "supabase db push --remote",
+    "db:push:dry": "supabase db push --remote --dry-run",
+    "db:lint": "supabase db lint --remote",
+    "db:test": "supabase test db --remote"
   },
   "dependencies": {
     "@hookform/resolvers": "^7.0.3",
@@ -41,6 +46,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.4.5",
     "jsdom": "^31.0.0",
+    "supabase": "^3.0.0",
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^5.1.0"

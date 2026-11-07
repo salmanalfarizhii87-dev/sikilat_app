@@ -73,8 +73,10 @@ Yang **masih** menjadi kekurangan frontend dan tercakup task di bawah: kunci jaw
 
 Kerjakan bagian ini sebelum Fase 1. Masing-masing kecil, tapi memblokir task lain.
 
-- [ ] **K1: Mode skor PG banyak jawaban.** Skema PRD §7.3 belum punya kolomnya, padahal QST-06 meminta dua mode. Usul: tambah `question_options` → kolom `mcq_multiple_mode text check (in ('all','partial')) default 'all'` di tabel `questions`. Perlu persetujuan karena mengubah skema PRD.
-- [ ] **K2: Penyimpanan rate limit.** Pilih: tabel Postgres (`rate_limits`) atau Upstash. Usul: tabel Postgres agar tidak ada dependensi baru.
+- [x] **K1: Mode skor PG banyak jawaban.** ~~Skema PRD §7.3 belum punya kolomnya, padahal QST-06 meminta dua mode.~~
+  - **Keputusan (7 November 2026): ikuti PRD — hanya mode "semua benar".** Tidak ada kolom `mcq_multiple_mode`. PG multiple mendapat poin penuh hanya bila himpunan opsi terpilih **sama persis** dengan kunci; selain itu 0. Alasan: menyederhanakan skema dan penilaian, serta sesuai praktik umum ujian sekolah untuk soal PG. Kalau nanti mode parsial dibutuhkan, itu perubahan schema + rumus + UI, dicatat sebagai task baru, bukan tambahan diam-diam.
+- [x] **K2: Penyimpanan rate limit.** ~~Pilih: tabel Postgres (`rate_limits`) atau Upstash.~~
+  - **Keputusan (7 November 2026): tabel Postgres.** Tanpa dependensi atau akun layanan baru, dan sudah cukup untuk beban satu sekolah. Implementasi: tabel `rate_limits` + fungsi RPC atomik (`select … for update`) yang dipanggil Server Action sebelum operasi sensitif (login admin, `startAttempt`, `resumeAttempt`). Tidak perlu Redis/Upstash.
 - [ ] **K3: Form: React Hook Form atau controlled.** PRD §5.1 menyebut RHF + resolvers. Usul: RHF hanya untuk form panjang (wizard, editor soal, login); form pendek tetap controlled agar diff kecil.
 - [ ] **K4: Editor teks kaya (QST-04).** Usul: `contentEditable` mini dengan toolbar tebal/miring/daftar, disimpan sebagai Markdown sederhana, disanitasi saat render. Hindari TipTap/Lexical agar bundel runner tetap kecil.
 - [ ] **K5: Kompresi gambar di klien.** Usul: `canvas` + `toBlob` (target ≤ 2 MB, sisi maks 1600 px), tanpa dependensi.
@@ -82,10 +84,17 @@ Kerjakan bagian ini sebelum Fase 1. Masing-masing kecil, tapi memblokir task lai
   - **Sudah diputuskan sebagian (T0.1):** `xlsx` dipasang dari CDN resmi SheetJS (`0.20.3`), bukan npm, karena `0.18.5` di npm punya 2 CVE high tanpa perbaikan. Paket tetap satu-satunya sumber parsing XLSX dan hanya boleh diimpor dari Route Handler.
 - [ ] **K7: TanStack Query dipakai atau dibuang.** Sudah terpasang tapi belum dipakai. Usul: pakai untuk monitor + tabel rekap; dashboard tetap Server Component.
 - [ ] **K8: Data demo.** Usul: hapus `mock-data.ts` dan `admin-data.ts` bertahap per fase, bukan sekaligus, agar UI tidak pernah kosong saat pengembangan.
+- [x] **K9: Akses langsung ke Storage.** ~~Siapa yang boleh membaca objek `question-media`?~~
+  - **Keputusan (7 November 2026): hanya lewat server-signed URL.** Tidak ada policy `select` untuk `anon`/`authenticated` pada `storage.objects`; RLS Storage tetap aktif tanpa policy baca, sehingga satu-satunya jalan adalah `createSignedUrl()` dari server memakai service role, dengan masa berlaku pendek dan hanya diterbitkan saat attempt aktif. Alasan: konsisten dengan prinsip "jangan percaya klien" — kalau peserta boleh membaca bucket langsung, siapa pun yang punya URL ujian bisa mengunduh semua gambar soal sebelum waktunya.
 
 ---
 
 ## Fase 0: Fondasi teknis (M1)
+
+- [ ] **T0.0: Provisioning Supabase Cloud** `P0` `S`
+  - Cakupan: dua project di Supabase Cloud (organisasi gratis): **`sikilat-dev`** dan **`sikilat-prod`**, keduanya region **Southeast Asia (Singapore) `ap-southeast-1`**. Simpan password database di pengelola kata sandi. Matikan **Allow new users to sign up** di Authentication → Providers → Email pada kedua project. Isi **Site URL** dan **Redirect URLs** dengan domain Vercel (prod) dan `http://localhost:3000` (dev).
+  - Batasan free plan yang harus diterima: 500 MB database, 1 GB storage, **tanpa backup otomatis**, project **di-pause setelah 7 hari tanpa aktivitas**, maksimal 2 project aktif. Mitigasi: keep-alive terjadwal + backup `pg_dump` lewat GitHub Actions (task T0.10).
+  - Selesai bila: kedua project berstatus `ACTIVE_HEALTHY`, signup publik tertutup, dan URL + anon key sudah tercatat di `.env.local` (tidak di-commit).
 
 - [x] **T0.1: Pasang dependensi yang disebut PRD** `P0` `S`
   - Cakupan: `zod`, `react-hook-form`, `@hookform/resolvers`, `@supabase/supabase-js`, `@supabase/ssr`, `papaparse`, `@types/papaparse`, `xlsx`, `recharts`, `server-only`; dev: `vitest`, `@testing-library/react`, `@testing-library/jest-dom`, `jsdom`, `@playwright/test`.
@@ -106,16 +115,17 @@ Kerjakan bagian ini sebelum Fase 1. Masing-masing kecil, tapi memblokir task lai
     - Belum ada pemanggil: modul ini dipakai mulai T0.4 (tiga klien Supabase).
 
 - [ ] **T0.3: Supabase CLI dan folder proyek** `P0` `S`
-  - Cakupan: `npx supabase init`, `supabase/config.toml`, tambahkan `supabase/` ke `.gitignore` bagian `.branches`/`.temp`.
-  - Selesai bila: `npx supabase start` jalan lokal; `supabase/migrations/` ada dan kosong.
+  - Cakupan: `npx supabase init` (sudah dijalankan), `supabase/config.toml` disesuaikan (bucket `question-media` privat ≤2 MB, `enable_signup = false`, `site_url`), `npx supabase link --project-ref <ref-dev>`, dan `supabase/migrations/` sebagai **satu-satunya sumber skema**.
+  - Catatan penting: CLI 3.0.0 bisa dipakai **tanpa Docker** untuk `init`, `link`, `db push`, `db lint`, `gen types --remote`, dan `test db --remote` (pgTAP). Yang tetap butuh Docker hanya `db dump`, `db reset`, dan `start` — karena itu tidak ada development lokal berbasis kontainer; pengembangan memakai project cloud `sikilat-dev`.
+  - Selesai bila: `npx supabase db push --dry-run` berhasil terhubung ke project dev (belum ada migrasi = tidak ada perubahan), dan `supabase/migrations/` ada.
 
 - [ ] **T0.4: Tiga klien Supabase** `P0` `S`
-  - Cakupan: `lib/supabase/client.ts` (browser), `lib/supabase/server.ts` (`cookies()` async, SSR), `lib/supabase/admin.ts` (`service_role`, `import "server-only"`).
-  - Selesai bila: impor `admin.ts` dari komponen klien menyebabkan build error.
+  - Cakupan: `lib/supabase/client.ts` (browser, `createBrowserClient`), `lib/supabase/server.ts` (`createServerClient` + `cookies()` async, untuk Server Component/Action/Route Handler), `lib/supabase/admin.ts` (`createClient` dengan service role, `import "server-only"`).
+  - Selesai bila: impor `admin.ts` dari komponen klien menyebabkan build error, bukan kebocoran kunci.
 
 - [ ] **T0.5: Tipe database terbuat otomatis** `P0` `S`
-  - Cakupan: skrip `npm run db:types` → `supabase gen types typescript --local > src/types/database.types.ts`; adapter `src/lib/types.ts` dipetakan dari tipe generated (bukan didefinisikan ulang).
-  - Selesai bila: `Question.correctOptionIds` hanya dipakai di modul admin/server; tipe peserta memakai `PublicQuestion` tanpa kunci.
+  - Cakupan: skrip `npm run db:types` → `supabase gen types typescript --remote > src/types/database.types.ts` (memakai `--remote`, bukan `--local`, karena tidak ada Postgres lokal; di CLI 3.0.0 `--linked` sudah dihapus). Adapter `src/lib/types.ts` dipetakan dari tipe generated, bukan didefinisikan ulang.
+  - Selesai bila: `src/types/database.types.ts` ter-generate dari project dev, dan `Question.correctOptionIds` hanya dipakai di modul admin/server; tipe peserta memakai `PublicQuestion` tanpa kunci.
 
 - [ ] **T0.6: Restrukturisasi folder sesuai PRD §5.4** `P0` `M`
   - Cakupan: buat `src/features/{auth,exams,questions,attempts,grading,reports}/` dengan `actions.ts`, `queries.ts`, `schemas.ts`, `types.ts`; pindahkan komponen yang jelas milik satu domain.
@@ -131,6 +141,17 @@ Kerjakan bagian ini sebelum Fase 1. Masing-masing kecil, tapi memblokir task lai
   - Cakupan: `src/app/(landing)/page.tsx` masih memakai `<a href="/admin/...">` untuk tautan internal (5 tempat, ganti ke `<Link>`) dan memanggil `setReduced()` langsung di dalam `useEffect` (pindahkan ke `useSyncExternalStore` atau inisialisasi lewat state awal). `globals.css` landing: `--footer-fg-muted` `#6b7280` di atas `#f3f4f6` = 4.39:1, naikkan ke `#5f6673` (5.25:1). Target sentuh HP: input kode 24 px, tombol Masuk 40 px, brand 34 px.
   - Catatan: task ini **melanggar** permintaan "100% asli" dari pemilik project. Jangan dikerjakan tanpa izin baru. Setelah dikerjakan, hapus `"src/app/(landing)/**"` dari `globalIgnores` di `eslint.config.mjs`.
   - Selesai bila: `npx eslint src` bersih tanpa pengecualian, kontras landing 0 pelanggaran, semua target sentuh ≥44 px.
+
+- [ ] **T0.9: Keep-alive agar project tidak di-pause** `P0` `S`
+  - Cakupan: workflow GitHub Actions terjadwal (mis. tiap 3 hari) yang menjalankan satu query ringan ke project `sikilat-prod` lewat REST API memakai anon key (atau `pg_isready`-style lewat RPC `select 1`). Simpan URL + anon key sebagai repository secret.
+  - Alasan: Supabase Free mem-pause project setelah **7 hari tanpa aktivitas**. Tanpa ini, ujian bisa gagal karena database tidur.
+  - Selesai bila: workflow berjalan manual (`workflow_dispatch`) tanpa error dan `Last activity` di dashboard ikut ter-update.
+
+- [ ] **T0.10: Backup harian tanpa Docker** `P1` `M`
+  - Cakupan: workflow GitHub Actions yang menjalankan `pg_dump` (sudah tersedia di runner `ubuntu-latest`) terhadap connection string `sikilat-prod`, lalu mengunggah hasilnya sebagai artifact dan/atau ke storage eksternal. Simpan connection string sebagai secret.
+  - Alasan: Free plan **tidak punya backup otomatis**; CLI `supabase db dump` butuh Docker sehingga tidak bisa dipakai di sini.
+  - Catatan: artifact GitHub pada repo publik hanya bisa diunduh setelah login dan disimpan 90 hari, jadi ini bukan pengganti backup sungguhan. Untuk data ujian nyata, unduh berkala ke penyimpanan milik sendiri.
+  - Selesai bila: satu dump berhasil dibuat dan bisa di-`pg_restore` ke project dev sebagai uji.
 
 ---
 
