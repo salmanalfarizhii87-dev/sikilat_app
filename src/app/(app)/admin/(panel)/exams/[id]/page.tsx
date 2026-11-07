@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import {
   Archive,
   ArrowUpRight,
@@ -32,6 +33,7 @@ import {
 } from "@/components/admin/ui";
 import { ExamTabs } from "@/components/admin/exam-tabs";
 import { demoExam, demoQuestions } from "@/lib/mock-data";
+import { findExam } from "@/lib/admin-data";
 import {
   activeAttempts,
   answeredIn,
@@ -48,6 +50,16 @@ const OFFLINE = "Belum tersambung ke server. Tidak ada yang berubah.";
 
 export default function ExamDetailPage({ params }: PageProps<"/admin/exams/[id]">) {
   const { id } = React.use(params);
+  /*
+   * `id` dari URL wajib dicocokkan ke data yang ada. Sebelumnya nilai ini
+   * diterima lalu diabaikan, sehingga `/admin/exams/apa-saja` menampilkan ujian
+   * demo seolah-olah itu ujian yang diminta — alamat salah tidak pernah terlihat
+   * salah. `notFound()` membuat 404 admin (`admin/not-found.tsx`) benar-benar
+   * muncul, lengkap dengan sidebar.
+   */
+  const found = findExam(id);
+  if (!found) notFound();
+
   const exam = demoExam;
   const summary = examSummary();
   // Ujian demo selalu terbuka; ini meniru apa yang akan dikontrol tombolnya.

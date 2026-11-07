@@ -33,3 +33,7 @@ pnpm-debug.log*
 next-env.d.ts
 .vercel
 .turbo
+
+# log lokal
+*.log
+

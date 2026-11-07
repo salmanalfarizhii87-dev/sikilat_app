@@ -96,10 +96,14 @@ Kerjakan bagian ini sebelum Fase 1. Masing-masing kecil, tapi memblokir task lai
     - `@tailwindcss/postcss` ditambahkan eksplisit ke devDependencies. Sebelumnya ada di `node_modules` tapi tidak tercatat di `package.json` (extraneous), sehingga `npm install` menghapusnya dan build gagal di `postcss.config.mjs`. Versi `^4.3.5`.
     - `xlsx` dipasang dari `https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`, bukan npm. Versi npm terakhir `0.18.5` (2022) punya 2 CVE high tanpa perbaikan (GHSA-4r6h-8v6p-xvw6, GHSA-5pgg-2g8v-p4x9). 0.20.3 sudah menambalnya. Sisa `npm audit`: 8 moderate, semuanya rantai dev-only `eslint-config-next`/`typescript-eslint`; high 0, critical 0.
 
-- [ ] **T0.2: Konfigurasi lingkungan dan konstanta** `P0` `S`
+- [x] **T0.2: Konfigurasi lingkungan dan konstanta** `P0` `S`
   - Cakupan: `.env.example` sesuai PRD §5.10; `src/lib/env.ts` (validasi Zod, server-only untuk service key); `src/lib/constants.ts` (`APP_NAME`, `APP_TIMEZONE`, prefiks cookie `kilat_`, kode error §8.1).
   - File: `.env.example`, `src/lib/env.ts`, `src/lib/constants.ts`.
   - Selesai bila: build gagal dengan pesan jelas bila variabel wajib kosong; tidak ada `process.env` liar di komponen.
+  - **Hasil (7 November 2026):** `.env.example` (7 variabel, tanpa nilai rahasia), `constants.ts` (`APP_NAME`, `APP_TIMEZONE`, `COOKIE_PREFIX`/`COOKIE_ATTEMPT_PREFIX`, 14 `ERROR_CODES` + pesan Indonesia, batas kode ujian, alfabet tanpa `0/O/1/I`, batas gambar), `env.ts` (`import "server-only"`, skema Zod, `serverEnv()` ber-cache, `isServerEnvConfigured()`).
+    - Pesan galat dikumpulkan per variabel, jadi pengembang langsung tahu mana yang kosong tanpa membaca stack trace.
+    - `server-only` membuat impor `env.ts` dari komponen klien menjadi error build, bukan kebocoran service key.
+    - Belum ada pemanggil: modul ini dipakai mulai T0.4 (tiga klien Supabase).
 
 - [ ] **T0.3: Supabase CLI dan folder proyek** `P0` `S`
   - Cakupan: `npx supabase init`, `supabase/config.toml`, tambahkan `supabase/` ke `.gitignore` bagian `.branches`/`.temp`.
@@ -118,9 +122,10 @@ Kerjakan bagian ini sebelum Fase 1. Masing-masing kecil, tapi memblokir task lai
   - Catatan: lakukan bertahap per fase; task ini hanya membuat kerangka + satu modul contoh agar tidak ada import rusak.
   - Selesai bila: `npx tsc --noEmit` dan `eslint` hijau, semua rute masih merender.
 
-- [ ] **T0.7: Rebranding teknis (Lampiran C)** `P1` `S`
+- [x] **T0.7: Rebranding teknis (Lampiran C)** `P1` `S`
   - Cakupan: `README.md` proyek KilatCBT (bukan bawaan create-next-app), hapus `public/{file,globe,next,vercel,window}.svg`, ganti `src/app/favicon.ico` dengan ikon petir, `package.json` name/description, pastikan tidak ada sisa teks "JawaraCBT/Manager/Teacher/Student".
   - Selesai bila: `grep -ri "jawaracbt\|create-next-app" src public README.md` kosong.
+  - **Hasil (7 November 2026):** 5 SVG bawaan dihapus (0 pemakaian di kode). `favicon.ico` dibuat ulang dari `src/app/icon.png` (petir) dalam 4 ukuran 16/32/48/64 px, 11.369 byte — sebelumnya masih ikon bawaan 3 ukuran. `README.md` sudah ditulis ulang sejak perapian repo; `package.json` sudah `"sikilat"`; sisa teks "JawaraCBT"/"create-next-app" = 0.
 
 - [ ] **T0.8: Rapikan temuan landing page (opsional, hanya jika boleh diubah)** `P2` `M`
   - Cakupan: `src/app/(landing)/page.tsx` masih memakai `<a href="/admin/...">` untuk tautan internal (5 tempat, ganti ke `<Link>`) dan memanggil `setReduced()` langsung di dalam `useEffect` (pindahkan ke `useSyncExternalStore` atau inisialisasi lewat state awal). `globals.css` landing: `--footer-fg-muted` `#6b7280` di atas `#f3f4f6` = 4.39:1, naikkan ke `#5f6673` (5.25:1). Target sentuh HP: input kode 24 px, tombol Masuk 40 px, brand 34 px.
@@ -423,9 +428,13 @@ Ini fase yang menutup tiga pelanggaran prinsip. Kerjakan berurutan.
   - Cakupan: `getLiveMonitor(examId)` via TanStack Query `refetchInterval` 10 detik (**K7**), berhenti saat tab tidak aktif, tombol jeda/segarkan, kolom pelanggaran dari `attempt_events`.
   - Selesai bila: jawaban peserta baru muncul di monitor dalam ≤ 10 detik.
 
-- [ ] **T7.3: Halaman error ramah (SYS-01)** `P0` `S`
+- [x] **T7.3: Halaman error ramah (SYS-01)** `P0` `S`
   - Cakupan: `not-found.tsx` peserta + admin, `error.tsx` per segmen, `global-error.tsx`, halaman 403.
   - Selesai bila: memaksa error di server component menampilkan halaman dengan tombol Coba lagi.
+  - **Hasil (7 November 2026):** `global-error.tsx` dibuat (menggantikan root layout, jadi mengimpor `globals.css` + font sendiri; tombol memakai `window.location.reload()` karena navigasi klien belum tentu hidup pada kegagalan sedalam itu). `admin/(panel)/not-found.tsx` dibuat dan **diletakkan di dalam `(panel)`** supaya sidebar + breadcrumb tetap tampil — versi di `admin/` sempat dicoba dan hasilnya 404 tanpa konteks.
+    - **Bug ditemukan & diperbaiki:** `/admin/exams/[id]` menerima `id` lalu mengabaikannya, sehingga `/admin/exams/apa-saja` menampilkan ujian demo seolah itu ujian yang diminta. Sekarang `findExam(id)` + `notFound()` dipanggil, jadi alamat salah benar-benar berujung 404.
+    - Halaman `/403` ditambahkan (statis, belum terhubung sesi; akan diarahkan `proxy.ts` di Fase 2).
+    - Diverifikasi dengan galat sungguhan: `error.tsx` menangkap, menampilkan pesan Indonesia + tombol "Coba muat ulang". 404 admin tampil dengan sidebar (`aside` + breadcrumb utuh). 16 rute diuji: 0 error konsol, 0 overflow.
 
 - [ ] **T7.4: `/api/health` (SYS-02)** `P1` `S`
   - Cakupan: Route Handler yang memeriksa koneksi database + versi build; tanpa data sensitif.
@@ -435,9 +444,14 @@ Ini fase yang menutup tiga pelanggaran prinsip. Kerjakan berurutan.
   - Cakupan: helper pencatat; dipakai oleh ubah nilai, reset attempt, hapus, rilis nilai; halaman daftar audit dengan filter aktor/aksi/tanggal.
   - Selesai bila: keempat aksi menghasilkan baris dengan `before_data`/`after_data`.
 
-- [ ] **T7.6: Header keamanan dan sanitasi** `P0` `S`
+- [x] **T7.6: Header keamanan dan sanitasi** `P0` `S`
   - Cakupan: CSP, `X-Frame-Options`, `Referrer-Policy` di `next.config.ts`; pastikan teks soal dan nama peserta dirender aman.
   - Selesai bila: `curl -I` menampilkan ketiga header; XSS uji tidak lolos.
+  - **Hasil (7 November 2026):** 5 header terpasang lewat `headers()` di `next.config.ts`, berlaku untuk semua rute: `Content-Security-Policy`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, `X-Content-Type-Options: nosniff`, `Permissions-Policy` (kamera/mikrofon/lokasi/pembayaran ditutup).
+    - **Batasan yang jujur:** `script-src` masih memuat `'unsafe-inline'` karena Next.js menyuntikkan skrip inline untuk data hidrasi dan versi ini belum memakai `proxy.ts` untuk nonce per-permintaan (bagian Fase 2). Tanpa itu aplikasi gagal hidrasi — halaman tampil tapi tidak interaktif, persis gejala yang pernah terjadi saat dev origin diblokir. Yang tetap ditegakkan: `object-src 'none'`, `base-uri 'self'`, `frame-ancestors 'none'`, dan skrip hanya dari origin sendiri.
+    - `'unsafe-eval'` + `ws:`/`wss:` hanya ditambahkan saat `NODE_ENV !== "production"` (kebutuhan Turbopack HMR), tidak pernah ikut ke build produksi.
+    - XSS: tidak ada `dangerouslySetInnerHTML`, `<script>`, atau `<iframe>` di seluruh `src/` (0 temuan), jadi React meng-escape semua teks otomatis.
+    - Diverifikasi pada build produksi: kelima header muncul di respons, dan hidrasi tetap hidup (validasi klien login muncul).
 
 - [ ] **T7.7: Keadaan kosong dan skeleton (§9.5)** `P1` `M`
   - Cakupan: "Kode tidak ditemukan", "Belum ada ujian + Buat ujian pertama", "Belum ada yang mengerjakan. Bagikan kode ABC123…", skeleton pada `loading.tsx` untuk tiap rute berat, error + Coba lagi.
