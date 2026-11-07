@@ -67,6 +67,12 @@ export default function AdminLoginPage() {
     setPending(true);
     saveAdminIdentity(email.trim());
     router.push("/admin");
+    /*
+     * Tombol dikembalikan ke keadaan semula setelah navigasi dimulai. Tanpa ini
+     * tombol tetap `disabled` dengan spinner berputar, sehingga pengguna
+     * terjebak kalau navigasi gagal dan tidak ada cara mencoba lagi.
+     */
+    window.setTimeout(() => setPending(false), 1500);
   };
 
   return (
