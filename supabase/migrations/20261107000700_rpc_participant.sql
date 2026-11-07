@@ -246,11 +246,10 @@ begin
                          'id', o.id, 'body', o.body, 'mediaPath', o.media_path
                        ) order by array_position(
                          coalesce(
-                           (select array_agg((e.value)::uuid)
+                           (select array_agg((e.value)::uuid order by e.i)
                             from jsonb_array_elements_text(
                               coalesce(v_attempt.option_orders -> q.id::text, '[]'::jsonb)
-                            ) with ordinality as e(value, i)
-                            order by i),
+                            ) with ordinality as e(value, i)),
                            array(select id from question_options
                                  where question_id = q.id order by position)
                          ),

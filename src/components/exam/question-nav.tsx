@@ -15,7 +15,9 @@ export function questionState(
     !!ans &&
     (question.type === "essay"
       ? ans.essayText.trim().length > 0
-      : ans.selectedOptionIds.length > 0);
+      : // Soal Benar/Salah yang dijawab "Salah" untuk semua pernyataan punya
+        // daftar opsi kosong, jadi `touched` yang menentukan sudah dijawab.
+        ans.selectedOptionIds.length > 0 || ans.touched === true);
   return { answered, flagged: !!ans?.flagged };
 }
 

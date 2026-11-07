@@ -435,6 +435,32 @@ Semua task di fase ini diverifikasi lewat `db lint` + uji HTTP ke Data API.
     selesai hidrasi (~1,5 dtk pada kompilasi pertama) sehingga nilai dikembalikan ke `""`. Uji
     sekarang menunggu fiber React menempel (`__reactFiber$`) sebelum menyentuh input.
 
+- [x] **T3.6: Ringkasan ujian: status, angka, dan aksi** `P0` `M`
+  - Cakupan: `exams/[id]/page.tsx` menampilkan status sebenarnya, statistik soal, dan aksi
+    buka/tutup/perpanjang/ganti kode/duplikat/arsip/hapus.
+  - Selesai bila: membuka detail ujian nyata menampilkan angkanya sendiri, bukan angka ujian contoh.
+  - **Selesai.** Halaman ditulis ulang sebagai Server Component. Sebelumnya komponen klien memanggil
+    `findExam(id)` pada data contoh, sehingga **setiap** ID nyata (UUID) menghasilkan 404 — detail
+    paket bank soal sama sekali tidak bisa dibuka. Aksi dipindah ke
+    `exams/[id]/exam-detail-actions.tsx` karena butuh state dialog konfirmasi.
+  - `getExamQuestionStats` ditambahkan di `queries.ts`: satu query mengambil `type`, `points`,
+    `passage`, `media_path`, lalu dihitung di memori — lebih murah daripada lima query `head: true`
+    untuk 30 soal per ujian.
+  - Status yang ditampilkan adalah **keadaan sebenarnya**, bukan kolom `status` saja: ujian
+    `published` yang jadwalnya belum mulai tampil "Terjadwal", yang sudah lewat tampil "Ditutup".
+    Guru perlu tahu peserta bisa masuk atau tidak, dan `status = published` saja tidak menjawab itu.
+  - **Bug ditemukan saat uji:** jumlah soal bergambar tidak pernah tampil untuk paket Matematika.
+    `withPassage` dan `withImage` berada dalam satu blok yang hanya dirender bila `withPassage > 0`,
+    dan semua paket Matematika tidak punya teks bacaan. Diperbaiki: keduanya dihitung terpisah dan
+    digabung seperlunya ("30 soal punya teks bacaan, 9 soal bergambar").
+  - Diverifikasi 35/35 di peramban: detail paket MTK (13 gambar, tanpa teks bacaan) dan paket BI
+    (30 teks bacaan, 9 gambar) tampil benar; lalu seluruh aksi — buka → Aktif + tombol Perpanjang
+    muncul; perpanjang 45 menit → `closes_at` terisi; ganti kode → kode lama hilang; duplikat →
+    draft "(salinan)" dengan soal tersalin; arsip → status Arsip + tombol "Keluarkan dari arsip";
+    hapus permanen → tombol terkunci sampai judul diketik, lalu salinan jadi 404; unarchive →
+    kembali `draft` (bukan `published`); tutup → "Ditutup" tanpa mengubah status jadi draft.
+  - Data uji dihapus setelah pengujian; DB kembali: 22 ujian (1 contoh + 21 bank soal), 505 soal, 0 attempt.
+
 - [x] **T3.7: Duplikat dan arsip** `P1` `M`
   - Cakupan: `duplicateExam` menyalin soal + opsi + pengaturan dengan kode baru (EXM-10); `archiveExam` (EXM-13).
   - Selesai bila: ujian duplikat muncul sebagai `draft` dengan 0 attempt.
@@ -468,6 +494,80 @@ Semua task di fase ini diverifikasi lewat `db lint` + uji HTTP ke Data API.
 - [ ] **T3.10: Pratinjau peserta (EXM-11)** `P1` `M`
   - Cakupan: rute pratinjau memakai komponen runner dengan data ujian nyata, tanpa membuat attempt, dengan banner "Mode pratinjau".
   - Selesai bila: membuka pratinjau tidak menambah baris `attempts`.
+
+---
+
+## Impor bank soal TKA (pekerjaan di luar daftar task)
+
+Pemilik produk menyerahkan 493 soal TKA SMP (Matematika + Bahasa Indonesia) beserta 42 berkas
+gambar. Seluruhnya sudah masuk database. Bagian ini mencatat **keputusan** yang diambil, karena
+beberapa di antaranya mengubah skema dan tidak terlihat dari daftar task di atas.
+
+**Sumber:** `bank-soal-matematika.json` (256 soal) dan `bank-soal-bahasa-indonesia.json` (237 soal),
+ditambah `assets/` (42 berkas, 8,1 MB, terbesar 1,7 MB).
+
+### Keputusan yang mengubah skema
+
+1. **Tipe soal baru `true_false`** (migrasi `0016`). Bank soal punya 85 soal berisi beberapa
+   pernyataan yang masing-masing harus dinilai Benar/Salah; aplikasi sebelumnya tidak punya
+   tempat untuk itu.
+   - Secara data tipe ini **identik** dengan `mcq_multiple`: sekumpulan opsi, sebagian bertanda
+     `is_correct` (pernyataan yang bernilai Benar). Karena itu ia **memakai aturan penilaian
+     "semua benar" yang sudah ada** (keputusan K1), bukan aturan kedua. Satu aturan untuk dua tipe
+     berarti tidak ada dua salinan logika yang bisa menyimpang.
+   - Konsekuensi yang disengaja: peserta wajib menjawab **setiap** pernyataan. Satu pernyataan
+     kosong membuat himpunan terpilih ≠ himpunan kunci, dan soalnya dinilai salah.
+2. **Kolom `questions.passage`** (migrasi `0016`). 228 soal Bahasa Indonesia mengacu ke teks bacaan,
+   dan satu teks dipakai sampai 6 soal (137 teks unik, terpanjang 1.824 karakter).
+   - Disimpan sebagai kolom, bukan tabel `passages` tersendiri: pemakaiannya selalu di dalam satu
+     ujian, sehingga relasi + urutan tampil + penanganan saat soal dihapus tidak sepadan dengan
+     penghematan beberapa kilobyte.
+3. **`attempt_answers` tidak berubah**, tetapi jawaban peserta mendapat penanda `touched` di sisi
+   aplikasi. Soal Benar/Salah yang dijawab "Salah" untuk semua pernyataan menghasilkan
+   `selectedOptionIds` kosong — sama persis dengan soal yang belum dijawab. Tanpa penanda ini, soal
+   yang sudah dijawab penuh akan tampil "kosong" di navigasi dan ikut dihitung belum dijawab pada
+   peringatan sebelum kirim.
+
+### Pemetaan tipe
+
+| Bank soal | Aplikasi | Kunci |
+|---|---|---|
+| `pilihan_ganda` (323) | `mcq_single` | indeks |
+| `pilihan_ganda_kompleks` (85) | `mcq_multiple` | array indeks |
+| `benar_salah` (85) | `true_false` | array boolean sejajar opsi |
+| `esai` | `essay` | — (tidak ada di bank soal ini) |
+
+### Pembagian paket
+
+Mengikuti `sumber.paket` bila ada. 72 soal Matematika tanpa paket dikelompokkan per topik
+(`Matematika — Latihan <topik>`). Hasilnya **21 paket**: 493 soal terbagi habis, tanpa duplikat.
+
+**Semua paket berstatus `draft`** supaya bisa ditinjau sebelum diaktifkan. `passing_score` diisi
+`null` ("tanpa KKM"), bukan `0` yang berarti semua peserta lulus. Poin seragam **1 per soal** —
+bank soal tidak menyimpan bobot, dan mengarang bobot akan menyiratkan penilaian yang tidak dimaksud
+penyusunnya.
+
+### Bug yang ditemukan pekerjaan ini
+
+- **`get_attempt_state` gagal setiap kali dipanggil** sejak migrasi `0007` (error `42803`):
+  `order by i` diletakkan di level query, di luar `array_agg`. Tidak pernah terdeteksi karena
+  `db lint` hanya memeriksa fungsi yang berubah di migrasi terakhir. Diperbaiki di `0018`
+  (dan sumbernya di `0007`). Perbaikannya sekaligus mengembalikan jaminan urutan opsi teracak.
+- **Bucket `question-media` tidak pernah ada di cloud.** `config.toml` hanya mendeklarasikannya
+  untuk lingkungan lokal, sehingga 45 unggahan gambar gagal dengan "Bucket not found" meski soalnya
+  tetap masuk. Dibuat lewat migrasi `0020`.
+- **Pencocokan gambar lewat `body` saja ambigu**: 41 soal Bahasa Indonesia memakai kalimat pembuka
+  yang sama persis. Kunci pencocokan diubah menjadi `body + seluruh teks opsi`.
+
+### Verifikasi
+
+- Skrip: `scripts/import-bank-soal.cjs` dan `scripts/upload-bank-gambar.cjs`, keduanya punya
+  `--dry-run` dan bisa diulang dengan aman.
+- 12/12 uji RPC `true_false`: `passage` terkirim, kunci tidak bocor, 20/20 untuk jawaban benar,
+  **0 untuk jawaban separuh** (semua-atau-tidak-sama-sekali terkonfirmasi).
+- 16/16 uji integritas data: 323 `mcq_single`, 85 `mcq_multiple`, 85 `true_false`, 228 ber-`passage`,
+  45 bergambar, tidak ada soal tanpa kunci, setiap `media_path` ada di storage, semua `passing_score`
+  NULL.
 
 ---
 
@@ -745,8 +845,8 @@ Ini fase yang menutup tiga pelanggaran prinsip. Kerjakan berurutan.
 
 | Fase | Task | Fokus |
 |---|---|---|
-| 0 | 7 | Fondasi, dependensi, Supabase, rebranding |
-| 1 | 12 | Skema, RLS, RPC, seed |
+| 0 | 11 | Fondasi, dependensi, Supabase, rebranding |
+| 1 | 15 | Skema, RLS, RPC, seed |
 | 2 | 7 | Auth admin, proxy, rate limit |
 | 3 | 10 | CRUD ujian, wizard, kunci setelah attempt |
 | 4 | 10 | Soal, gambar, DnD, impor CSV/XLSX |
@@ -756,7 +856,7 @@ Ini fase yang menutup tiga pelanggaran prinsip. Kerjakan berurutan.
 | 8 | 10 | Unit, RLS, e2e, beban, CI |
 | 9 | 4 | Deploy, cron, uji coba, dokumentasi |
 | 10 | 9 | Backlog P2 |
-| **Total** | **101** | |
+| **Total** | **108** | |
 
 Urutan yang disarankan: Fase 0 → 1 → 2 → 3 → 4 (paralel dengan 5.1–5.5) → 5 → 6 → 7 → 8 → 9. Fase 10 kapan saja setelah rilis.
 

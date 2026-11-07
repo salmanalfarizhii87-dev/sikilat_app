@@ -484,3 +484,54 @@ export async function examHasAttempts(examId: string): Promise<boolean> {
 
   return (count ?? 0) > 0;
 }
+
+/**
+ * Statistik soal untuk halaman ringkasan ujian (T3.6).
+ *
+ * Satu query mengambil `type`, `points`, `passage`, dan `media_path` sekaligus,
+ * lalu dihitung di memori. Alternatifnya lima query `head: true` terpisah, dan
+ * untuk 30 soal per ujian mengirim empat kolom jauh lebih murah daripada lima
+ * perjalanan ke database.
+ *
+ * `attemptCount` ikut diambil karena halaman ringkasan menampilkannya di kartu
+ * "Peserta" dan di peringatan soal terkunci.
+ */
+export interface ExamQuestionStats {
+  questionCount: number;
+  totalPoints: number;
+  mcqSingle: number;
+  mcqMultiple: number;
+  trueFalse: number;
+  essay: number;
+  withPassage: number;
+  withImage: number;
+  attemptCount: number;
+}
+
+export async function getExamQuestionStats(examId: string): Promise<ExamQuestionStats> {
+  const supabase = await createClient();
+
+  const [questionsResult, attemptsResult] = await Promise.all([
+    supabase.from("questions").select("type, points, passage, media_path").eq("exam_id", examId),
+    supabase.from("attempts").select("id", { count: "exact", head: true }).eq("exam_id", examId),
+  ]);
+
+  if (questionsResult.error) {
+    console.error("[getExamQuestionStats] gagal membaca soal:", questionsResult.error.message);
+    throw new Error("Gagal memuat statistik soal.");
+  }
+
+  const rows = questionsResult.data ?? [];
+
+  return {
+    questionCount: rows.length,
+    totalPoints: rows.reduce((sum, q) => sum + Number(q.points ?? 0), 0),
+    mcqSingle: rows.filter((q) => q.type === "mcq_single").length,
+    mcqMultiple: rows.filter((q) => q.type === "mcq_multiple").length,
+    trueFalse: rows.filter((q) => q.type === "true_false").length,
+    essay: rows.filter((q) => q.type === "essay").length,
+    withPassage: rows.filter((q) => q.passage !== null).length,
+    withImage: rows.filter((q) => q.media_path !== null).length,
+    attemptCount: attemptsResult.count ?? 0,
+  };
+}

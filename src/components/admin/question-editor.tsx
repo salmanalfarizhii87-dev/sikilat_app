@@ -25,6 +25,8 @@ export interface DraftQuestion {
   key: string;
   type: QuestionType;
   body: string;
+  /** Teks bacaan bersama; kosong/null bila soal tidak memerlukannya. */
+  passage?: string;
   points: number;
   options: { id: string; body: string }[];
   correct: string[];
@@ -75,6 +77,7 @@ export function questionFromModel(q: Question): DraftQuestion {
 const typeLabel: Record<QuestionType, string> = {
   mcq_single: "PG",
   mcq_multiple: "PG banyak",
+  true_false: "Benar/Salah",
   essay: "Esai",
 };
 
@@ -285,6 +288,9 @@ function QuestionForm({
 }) {
   const isEssay = value.type === "essay";
   const isMulti = value.type === "mcq_multiple";
+  // Benar/Salah juga butuh banyak opsi bertanda benar (setiap pernyataan yang
+  // bernilai Benar), jadi perilaku penandaan kuncinya sama dengan PG banyak.
+  const isMultiCorrect = value.type === "mcq_multiple" || value.type === "true_false";
 
   const setType = (type: QuestionType) => {
     if (type === "essay") {
@@ -308,7 +314,7 @@ function QuestionForm({
 
   const toggleCorrect = (id: string) => {
     if (locked) return;
-    if (isMulti) {
+    if (isMultiCorrect) {
       onChange({
         correct: value.correct.includes(id)
           ? value.correct.filter((x) => x !== id)
@@ -380,6 +386,7 @@ function QuestionForm({
             >
               <option value="mcq_single">Pilihan ganda (satu jawaban)</option>
               <option value="mcq_multiple">Pilihan ganda (banyak jawaban)</option>
+              <option value="true_false">Benar/Salah (per pernyataan)</option>
               <option value="essay">Esai</option>
             </Select>
           </Field>
@@ -394,6 +401,19 @@ function QuestionForm({
             />
           </Field>
         </div>
+
+        <Field
+          label="Teks bacaan"
+          hint="Opsional. Ditampilkan di atas pertanyaan; berguna untuk soal berbasis teks."
+        >
+          <Textarea
+            value={value.passage ?? ""}
+            disabled={locked}
+            onChange={(e) => onChange({ passage: e.target.value || undefined })}
+            placeholder="Tempel teks bacaan di sini, atau biarkan kosong…"
+            className="min-h-20"
+          />
+        </Field>
 
         <Field
           label="Pertanyaan"

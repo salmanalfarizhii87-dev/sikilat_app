@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
@@ -23,7 +23,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { Badge } from "@/components/ui/primitives";
 import { ExamTimer } from "./exam-timer";
-import { OptionRow, EssayAnswer } from "./question-parts";
+import { OptionRow, EssayAnswer, TrueFalseRow, PassagePanel } from "./question-parts";
 import { QuestionGrid, NavLegend, questionState, type NavFilter } from "./question-nav";
 import { BuramLayer } from "./buram-layer";
 import { useExamRunner } from "./exam-store";
@@ -81,7 +81,7 @@ export function ExamRunner() {
     }
   }, [ready, attempt, exam.code, router]);
 
-  // PRD §9.3: tombol Back peramban tidak boleh meninggalkan attempt tanpa
+  // PRD Â§9.3: tombol Back peramban tidak boleh meninggalkan attempt tanpa
   // konfirmasi. Kita dorong satu entri riwayat penjaga supaya Back pertama
   // membuka dialog keluar, bukan berpindah halaman.
   React.useEffect(() => {
@@ -149,7 +149,7 @@ export function ExamRunner() {
       if (question?.type !== "essay" && /^[a-eA-E]$/.test(e.key)) {
         const opt = question.options["abcde".indexOf(e.key.toLowerCase())];
         if (opt) {
-          setAnswer(question.id, { selectedOptionIds: [opt.id] });
+          setAnswer(question.id, { selectedOptionIds: [opt.id], touched: true });
           markSaving();
         }
       }
@@ -182,14 +182,14 @@ export function ExamRunner() {
   }
 
   const selectOption = (optionId: string) => {
-    if (question.type === "mcq_multiple") {
+    if (question.type === "mcq_multiple" || question.type === "true_false") {
       const current = answer?.selectedOptionIds ?? [];
       const next = current.includes(optionId)
         ? current.filter((id) => id !== optionId)
         : [...current, optionId];
-      setAnswer(question.id, { selectedOptionIds: next });
+      setAnswer(question.id, { selectedOptionIds: next, touched: true });
     } else {
-      setAnswer(question.id, { selectedOptionIds: [optionId] });
+      setAnswer(question.id, { selectedOptionIds: [optionId], touched: true });
     }
     markSaving();
   };
@@ -232,7 +232,7 @@ export function ExamRunner() {
               {attempt.participantName}
             </h1>
             <p className="hidden truncate text-[12px] text-muted sm:block">
-              {exam.subjectLabel.split("·")[0]?.trim() || exam.title}
+              {exam.subjectLabel.split("Â·")[0]?.trim() || exam.title}
             </p>
           </div>
         </div>
@@ -278,7 +278,7 @@ export function ExamRunner() {
         </div>
       </header>
 
-      {/* Motif identitas: satu garis progres tipis di bawah header (DESIGN.md §10). */}
+      {/* Motif identitas: satu garis progres tipis di bawah header (DESIGN.md Â§10). */}
       <div className="relative z-30 h-[3px] w-full overflow-hidden bg-line-soft">
         <div
           className={cn(
@@ -376,6 +376,8 @@ export function ExamRunner() {
                 </div>
 
                 <div className="mt-5 space-y-4">
+                  {question.passage && <PassagePanel text={question.passage} />}
+
                   <p className="text-[16px] leading-[1.75] text-ink">{question.body}</p>
 
                   {question.mediaCaption && (
@@ -395,10 +397,52 @@ export function ExamRunner() {
                       wordMin={question.wordMin}
                       wordMax={question.wordMax}
                       onChange={(next) => {
-                        setAnswer(question.id, { essayText: next });
+                        setAnswer(question.id, { essayText: next, touched: true });
                         markSaving();
                       }}
                     />
+                  ) : question.type === "true_false" ? (
+                    /*
+                     * Setiap pernyataan dinilai Benar atau Salah. "Benar"
+                     * berarti opsi itu masuk `selectedOptionIds`; "Salah"
+                     * berarti tidak â€” karena itu penilaiannya memakai aturan
+                     * "semua benar" yang sama dengan PG banyak jawaban.
+                     */
+                    <div className="space-y-2.5">
+                      <p className="text-[12.5px] font-medium text-navy-700">
+                        Tentukan Benar atau Salah untuk setiap pernyataan.
+                      </p>
+                      {question.options.map((opt, i) => {
+                        const picked = answer?.selectedOptionIds ?? [];
+                        const value = picked.includes(opt.id)
+                          ? true
+                          : // Opsi yang tidak dipilih berarti "Salah" hanya bila
+                            // peserta sudah menjawab soal ini sama sekali.
+                            // Tanpa pembeda ini, "belum dijawab" dan "dijawab
+                            // Salah" tampak identik di layar — dan jawaban
+                            // "semua Salah" akan terlihat seperti tidak diisi.
+                            answer?.touched
+                            ? false
+                            : null;
+                        return (
+                          <TrueFalseRow
+                            key={opt.id}
+                            option={opt}
+                            index={i}
+                            value={value}
+                            onAnswer={(next) => {
+                              const current = answer?.selectedOptionIds ?? [];
+                              const without = current.filter((id) => id !== opt.id);
+                              setAnswer(question.id, {
+                                selectedOptionIds: next ? [...without, opt.id] : without,
+                                touched: true,
+                              });
+                              markSaving();
+                            }}
+                          />
+                        );
+                      })}
+                    </div>
                   ) : (
                     <div className="space-y-2.5">
                       {question.type === "mcq_multiple" && (
@@ -446,13 +490,13 @@ export function ExamRunner() {
             <div className="mx-auto hidden items-center gap-2 text-[12px] font-medium text-muted sm:flex">
               <span>{answered} terjawab</span>
               <span className="text-line" aria-hidden>
-                ·
+                Â·
               </span>
               <span>{unanswered} kosong</span>
               {flagged > 0 && (
                 <>
                   <span className="text-line" aria-hidden>
-                    ·
+                    Â·
                   </span>
                   <span className="text-accent-900">{flagged} ragu</span>
                 </>
@@ -685,7 +729,7 @@ export function ExamRunner() {
         open={reportOpen}
         onClose={() => setReportOpen(false)}
         title="Laporkan masalah"
-        description={`Soal ${index + 1} · ${exam.subjectLabel}`}
+        description={`Soal ${index + 1} Â· ${exam.subjectLabel}`}
         icon={
           <span className="grid size-10 place-items-center rounded-card bg-accent-100 text-accent-900">
             <MessageSquareWarning className="size-5" aria-hidden />
@@ -756,7 +800,7 @@ export function ExamRunner() {
 /**
  * Indikator simpan menyebut tempat penyimpanan yang sebenarnya. Menulis
  * "tersimpan" tanpa kualifikasi akan membuat peserta mengira jawabannya sudah
- * ada di server (DESIGN.md §9).
+ * ada di server (DESIGN.md Â§9).
  */
 function SaveIndicator({ state, online }: { state: SaveState; online: boolean }) {
   if (!online) {

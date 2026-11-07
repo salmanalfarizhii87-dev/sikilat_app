@@ -406,6 +406,7 @@ export type Database = {
           explanation: string | null
           id: string
           media_path: string | null
+          passage: string | null
           points: number
           position: number
           reference_answer: string | null
@@ -420,6 +421,7 @@ export type Database = {
           explanation?: string | null
           id?: string
           media_path?: string | null
+          passage?: string | null
           points?: number
           position: number
           reference_answer?: string | null
@@ -434,6 +436,7 @@ export type Database = {
           explanation?: string | null
           id?: string
           media_path?: string | null
+          passage?: string | null
           points?: number
           position?: number
           reference_answer?: string | null
@@ -578,7 +581,7 @@ export type Database = {
     Enums: {
       attempt_status: "in_progress" | "needs_grading" | "graded"
       exam_status: "draft" | "published" | "archived"
-      question_type: "mcq_single" | "mcq_multiple" | "essay"
+      question_type: "mcq_single" | "mcq_multiple" | "essay" | "true_false"
       result_release: "instant" | "after_close" | "manual"
       result_visibility: "hidden" | "score_only" | "score_and_review"
       score_policy: "highest" | "latest" | "first" | "average"
@@ -714,7 +717,7 @@ export const Constants = {
     Enums: {
       attempt_status: ["in_progress", "needs_grading", "graded"],
       exam_status: ["draft", "published", "archived"],
-      question_type: ["mcq_single", "mcq_multiple", "essay"],
+      question_type: ["mcq_single", "mcq_multiple", "essay", "true_false"],
       result_release: ["instant", "after_close", "manual"],
       result_visibility: ["hidden", "score_only", "score_and_review"],
       score_policy: ["highest", "latest", "first", "average"],

@@ -1,88 +1,106 @@
-"use client";
-
-import * as React from "react";
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
-  Archive,
-  ArrowUpRight,
   CalendarClock,
   ClipboardList,
   Clock3,
-  Copy,
   Eye,
   FileStack,
   KeyRound,
   Lock,
-  Pause,
-  Play,
-  RefreshCw,
   Settings2,
   Users,
 } from "lucide-react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Badge, SampleDataNote } from "@/components/ui/primitives";
-import {
-  PageHeader,
-  StatCard,
-  Panel,
-  ExamLinkRow,
-  CopyButton,
-  StatusBadge,
-} from "@/components/admin/ui";
+import { Badge } from "@/components/ui/primitives";
+import { PageHeader, StatCard, Panel, ExamLinkRow, CopyButton, StatusBadge } from "@/components/admin/ui";
 import { ExamTabs } from "@/components/admin/exam-tabs";
-import { demoExam, demoQuestions } from "@/lib/mock-data";
-import { findExam } from "@/lib/admin-data";
-import {
-  activeAttempts,
-  answeredIn,
-  attemptPercent,
-  demoAttempts,
-  examSummary,
-  pendingAttempts,
-  remainingMinutes,
-} from "@/lib/admin-data";
+import { getExam, examHasAttempts, getExamQuestionStats } from "@/features/exams/queries";
 import { formatDateTimeId, formatDuration } from "@/lib/utils";
+import { ExamDetailActions } from "./exam-detail-actions";
 
-/** Semua aksi di halaman ini butuh server; toast-nya menyebut itu apa adanya. */
-const OFFLINE = "Belum tersambung ke server. Tidak ada yang berubah.";
+/**
+ * Ringkasan ujian (T3.6).
+ *
+ * Server Component: seluruh angka dibaca dari database, bukan dari data contoh.
+ * Sebelumnya halaman ini komponen klien yang memanggil `findExam(id)` pada data
+ * demo — akibatnya **setiap** ID nyata (UUID) menghasilkan 404, dan angka
+ * peserta/nilai yang tampil selalu milik ujian contoh.
+ *
+ * Aksi yang mengubah keadaan (buka/tutup/perpanjang/ganti kode/duplikat/arsip)
+ * ada di `ExamDetailActions` karena butuh state dan dialog konfirmasi.
+ */
+export const metadata: Metadata = { title: "Ringkasan ujian" };
 
-export default function ExamDetailPage({ params }: PageProps<"/admin/exams/[id]">) {
-  const { id } = React.use(params);
+export default async function ExamDetailPage({ params }: PageProps<"/admin/exams/[id]">) {
+  const { id } = await params;
+
   /*
-   * `id` dari URL wajib dicocokkan ke data yang ada. Sebelumnya nilai ini
-   * diterima lalu diabaikan, sehingga `/admin/exams/apa-saja` menampilkan ujian
-   * demo seolah-olah itu ujian yang diminta — alamat salah tidak pernah terlihat
-   * salah. `notFound()` membuat 404 admin (`admin/not-found.tsx`) benar-benar
-   * muncul, lengkap dengan sidebar.
+   * `getExam` memakai `maybeSingle()`, jadi ID yang tidak ada menghasilkan
+   * `null` — bukan error. Halaman lalu memanggil `notFound()` sehingga 404
+   * admin benar-benar muncul, lengkap dengan sidebar.
    */
-  const found = findExam(id);
-  if (!found) notFound();
+  const exam = await getExam(id);
+  if (!exam) notFound();
 
-  const exam = demoExam;
-  const summary = examSummary();
-  // Ujian demo selalu terbuka; ini meniru apa yang akan dikontrol tombolnya.
-  const open = exam.status === "published";
-  const totalPoints = demoQuestions.reduce((s, q) => s + q.points, 0);
+  /*
+   * Tiga pembacaan tambahan berjalan paralel: statistik soal, jumlah attempt,
+   * dan status penguncian. `examHasAttempts` mengembalikan `true` bila gagal
+   * menghitung — arah aman untuk fitur yang membuka/mengunci soal.
+   */
+  const [stats, hasAttempts] = await Promise.all([getExamQuestionStats(exam.id), examHasAttempts(exam.id)]);
+
+  const now = new Date();
+  const opensAt = exam.opensAt ? new Date(exam.opensAt) : null;
+  const closesAt = exam.closesAt ? new Date(exam.closesAt) : null;
+
+  /*
+   * Status yang dilihat guru berbeda dari kolom `status` saja. Ujian
+   * ber-`status = published` yang jadwalnya belum mulai atau sudah lewat tetap
+   * tidak bisa dikerjakan, jadi yang ditampilkan adalah keadaan sebenarnya.
+   */
+  const phase: "draft" | "scheduled" | "open" | "closed" | "archived" =
+    exam.status === "archived"
+      ? "archived"
+      : exam.status === "draft"
+        ? "draft"
+        : opensAt && now < opensAt
+          ? "scheduled"
+          : closesAt && now >= closesAt
+            ? "closed"
+            : "open";
+
+  const phaseLabel = {
+    draft: "Draft",
+    scheduled: "Terjadwal",
+    open: "Aktif",
+    closed: "Ditutup",
+    archived: "Arsip",
+  }[phase];
+
+  const phaseHint = {
+    draft: "Belum bisa diakses peserta",
+    scheduled: "Dibuka sesuai jadwal",
+    open: "Peserta bisa masuk",
+    closed: "Peserta ditolak",
+    archived: "Disimpan, tidak aktif",
+  }[phase];
 
   return (
     <>
       <PageHeader
         title={exam.title}
-        description={exam.description}
+        description={exam.description ?? undefined}
         actions={
-          <>
-            <Button variant="secondary" size="md" onClick={() => toast(OFFLINE)}>
-              {open ? <Pause className="size-4" aria-hidden /> : <Play className="size-4" aria-hidden />}
-              {open ? "Tutup sekarang" : "Buka sekarang"}
-            </Button>
-            <Link href={`/admin/exams/${id}/questions`}>
-              <Button size="md">
-                <ClipboardList className="size-4" aria-hidden /> Kelola soal
-              </Button>
-            </Link>
-          </>
+          <ExamDetailActions
+            examId={exam.id}
+            code={exam.code}
+            title={exam.title}
+            status={exam.status}
+            phase={phase}
+            hasAttempts={hasAttempts}
+          />
         }
       >
         <p className="mt-2 flex flex-wrap items-center gap-2 text-[12.5px] text-muted">
@@ -90,35 +108,30 @@ export default function ExamDetailPage({ params }: PageProps<"/admin/exams/[id]"
           <span className="rounded-xs bg-line-soft px-1.5 py-0.5 font-heading text-[11px] font-bold text-ink-soft">
             {exam.code}
           </span>
-          {exam.subjectLabel}
+          {exam.subjectLabel && <span>{exam.subjectLabel}</span>}
         </p>
       </PageHeader>
 
-      <ExamTabs examId={id} />
-
-      <SampleDataNote className="mb-3">
-        Ujian ini contoh bawaan. Angka peserta dan nilai di bawah berasal dari data contoh.
-      </SampleDataNote>
+      <ExamTabs examId={exam.id} />
 
       <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
         <StatCard
           label="Status"
-          value={open ? "Aktif" : "Ditutup"}
-          hint={open ? "Peserta bisa masuk" : "Peserta ditolak"}
-          tone={open ? "green" : "plain"}
+          value={phaseLabel}
+          hint={phaseHint}
+          tone={phase === "open" ? "green" : phase === "scheduled" ? "amber" : "plain"}
           marker
         />
         <StatCard
           label="Peserta"
-          value={demoAttempts.length}
-          hint={`${summary.active} sedang mengerjakan`}
+          value={stats.attemptCount}
+          hint={hasAttempts ? "sudah ada percobaan" : "belum ada percobaan"}
         />
-        <StatCard label="Rata-rata" value={summary.average} hint={`${summary.passRate}% lulus KKM`} />
+        <StatCard label="Soal" value={stats.questionCount} hint={`${stats.totalPoints} poin total`} />
         <StatCard
-          label="Perlu dinilai"
-          value={summary.pending}
-          hint="percobaan dengan esai"
-          tone="amber"
+          label="Durasi"
+          value={`${exam.durationMinutes} mnt`}
+          hint={`maks ${exam.maxAttempts}× per nama`}
         />
       </div>
 
@@ -134,13 +147,15 @@ export default function ExamDetailPage({ params }: PageProps<"/admin/exams/[id]"
               </div>
               <div className="flex flex-col gap-1.5">
                 <CopyButton value={exam.code} label="Salin kode" size="md" variant="dark" />
-                <button
-                  type="button"
-                  onClick={() => toast(OFFLINE)}
-                  className="press inline-flex h-11 items-center gap-1.5 rounded-field px-2.5 font-heading text-[12px] font-semibold text-muted hover:bg-line-soft"
-                >
-                  <RefreshCw className="size-3.5" aria-hidden /> Buat kode baru
-                </button>
+                <ExamDetailActions
+                  examId={exam.id}
+                  code={exam.code}
+                  title={exam.title}
+                  status={exam.status}
+                  phase={phase}
+                  hasAttempts={hasAttempts}
+                  variant="regenerate"
+                />
               </div>
             </div>
 
@@ -190,14 +205,30 @@ export default function ExamDetailPage({ params }: PageProps<"/admin/exams/[id]"
                 {exam.askClass ? "Kelas diminta" : "Tanpa kelas"}
               </Badge>
               <Badge tone="outline">
-                {exam.resultVisibility === "score_and_review" ? "Skor dan pembahasan" : "Skor saja"}
+                {exam.resultVisibility === "score_and_review"
+                  ? "Skor dan pembahasan"
+                  : exam.resultVisibility === "hidden"
+                    ? "Hasil disembunyikan"
+                    : "Skor saja"}
               </Badge>
-              <Badge tone="outline">KKM {exam.passingScore}</Badge>
+              {/*
+                `passingScore` null berarti "tanpa KKM" dan itu berbeda dari 0
+                yang berarti semua peserta lulus. Menampilkan "KKM 0" akan
+                salah arti, jadi null punya labelnya sendiri.
+              */}
+              <Badge tone="outline">
+                {exam.passingScore === null ? "Tanpa KKM" : `KKM ${exam.passingScore}`}
+              </Badge>
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
-              <Link href={`/admin/exams/${id}/settings`}>
+              <Link href={`/admin/exams/${exam.id}/settings`}>
                 <Button variant="secondary" size="sm">
                   <Settings2 className="size-3.5" aria-hidden /> Ubah pengaturan
+                </Button>
+              </Link>
+              <Link href={`/admin/exams/${exam.id}/questions`}>
+                <Button variant="secondary" size="sm">
+                  <ClipboardList className="size-3.5" aria-hidden /> Kelola soal
                 </Button>
               </Link>
               <Link href={`/u/${exam.code}`} target="_blank" rel="noreferrer">
@@ -213,18 +244,12 @@ export default function ExamDetailPage({ params }: PageProps<"/admin/exams/[id]"
           <Panel title="Isi ujian">
             <dl className="space-y-2 text-[12.5px]">
               {[
-                { label: "Jumlah soal", value: `${demoQuestions.length} soal`, icon: FileStack },
-                { label: "Total poin", value: `${totalPoints} poin`, icon: ClipboardList },
-                {
-                  label: "Soal esai",
-                  value: `${demoQuestions.filter((q) => q.type === "essay").length} soal`,
-                  icon: ClipboardList,
-                },
-                {
-                  label: "PG banyak jawaban",
-                  value: `${demoQuestions.filter((q) => q.type === "mcq_multiple").length} soal`,
-                  icon: Copy,
-                },
+                { label: "Jumlah soal", value: `${stats.questionCount} soal`, icon: FileStack },
+                { label: "Total poin", value: `${stats.totalPoints} poin`, icon: ClipboardList },
+                { label: "Pilihan ganda", value: `${stats.mcqSingle} soal`, icon: ClipboardList },
+                { label: "Banyak jawaban", value: `${stats.mcqMultiple} soal`, icon: ClipboardList },
+                { label: "Benar/Salah", value: `${stats.trueFalse} soal`, icon: ClipboardList },
+                { label: "Esai", value: `${stats.essay} soal`, icon: ClipboardList },
               ].map((row) => (
                 <div key={row.label} className="flex items-center justify-between gap-2">
                   <dt className="flex items-center gap-1.5 text-muted">
@@ -234,67 +259,36 @@ export default function ExamDetailPage({ params }: PageProps<"/admin/exams/[id]"
                 </div>
               ))}
             </dl>
-            <div className="mt-3 rounded-field border border-accent-200 bg-accent-50 px-3 py-2">
-              <p className="flex items-center gap-1.5 font-heading text-[12px] font-bold text-accent-900">
-                <Lock className="size-3.5" aria-hidden /> Soal terkunci
-              </p>
-              <p className="mt-0.5 text-[12px] leading-relaxed text-accent-900">
-                Sudah ada {demoAttempts.length} percobaan. Isi soal tidak bisa diubah lagi.
-              </p>
-            </div>
-          </Panel>
 
-          <Panel
-            title="Peserta terbaru"
-            padded={false}
-            action={
-              <Link
-                href={`/admin/exams/${id}/monitor`}
-                className="press inline-flex min-h-11 items-center gap-1 rounded-field px-2.5 py-1 font-heading text-[12px] font-semibold text-navy-700 hover:bg-line-soft"
-              >
-                Monitor <ArrowUpRight className="size-3" aria-hidden />
-              </Link>
-            }
-          >
-            <ul className="divide-y divide-line">
-              {[...activeAttempts.slice(0, 3), ...pendingAttempts.slice(0, 2)].map((attempt) => (
-                <li key={attempt.id} className="flex items-center gap-2.5 px-4 py-2.5">
-                  <span className="grid size-7 shrink-0 place-items-center rounded-xs bg-line-soft font-heading text-[11px] font-bold text-ink-soft">
-                    {attempt.participantClass}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-[12.5px] font-semibold text-ink">
-                      {attempt.participantName}
-                    </p>
-                    <p className="text-[11.5px] text-muted">
-                      {attempt.status === "in_progress"
-                        ? `${answeredIn(attempt)}/${demoQuestions.length} terjawab, sisa ${remainingMinutes(attempt)} mnt`
-                        : `Nilai ${attemptPercent(attempt)}, perlu dinilai`}
-                    </p>
-                  </div>
-                  <StatusBadge status={attempt.status} />
-                </li>
-              ))}
-            </ul>
-          </Panel>
+            {hasAttempts && (
+              <div className="mt-3 rounded-field border border-accent-200 bg-accent-50 px-3 py-2">
+                <p className="flex items-center gap-1.5 font-heading text-[12px] font-bold text-accent-900">
+                  <Lock className="size-3.5" aria-hidden /> Soal terkunci
+                </p>
+                <p className="mt-0.5 text-[12px] leading-relaxed text-accent-900">
+                  Sudah ada {stats.attemptCount} percobaan. Isi soal tidak bisa diubah lagi supaya
+                  nilai peserta tetap adil.
+                </p>
+              </div>
+            )}
 
-          <Panel title="Zona berbahaya" description="Aksi di sini belum bisa dibatalkan.">
-            <div className="space-y-2">
-              <button
-                type="button"
-                onClick={() => toast(OFFLINE)}
-                className="press flex min-h-11 w-full items-center gap-2 rounded-field border border-line px-3 py-2 text-left text-[12.5px] text-ink-soft hover:bg-line-soft"
-              >
-                <Copy className="size-3.5" aria-hidden /> Duplikat ujian ini
-              </button>
-              <button
-                type="button"
-                onClick={() => toast(OFFLINE)}
-                className="press flex min-h-11 w-full items-center gap-2 rounded-field border border-line px-3 py-2 text-left text-[12.5px] text-ink-soft hover:bg-line-soft"
-              >
-                <Archive className="size-3.5" aria-hidden /> Arsipkan ujian
-              </button>
-            </div>
+            {/*
+              Teks bacaan dan gambar dihitung terpisah. Sebelumnya keduanya
+              berada dalam satu blok yang hanya tampil bila `withPassage > 0`,
+              sehingga paket yang punya gambar tetapi tanpa teks bacaan (semua
+              paket Matematika) tidak pernah menampilkan jumlah gambarnya.
+            */}
+            {(stats.withPassage > 0 || stats.withImage > 0) && (
+              <p className="mt-3 text-[12px] leading-relaxed text-muted">
+                {[
+                  stats.withPassage > 0 ? `${stats.withPassage} soal punya teks bacaan` : null,
+                  stats.withImage > 0 ? `${stats.withImage} soal bergambar` : null,
+                ]
+                  .filter(Boolean)
+                  .join(", ")}
+                .
+              </p>
+            )}
           </Panel>
         </div>
       </div>
