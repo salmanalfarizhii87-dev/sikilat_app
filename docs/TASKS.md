@@ -166,54 +166,90 @@ Kerjakan bagian ini sebelum Fase 1. Masing-masing kecil, tapi memblokir task lai
 
 ## Fase 1: Database, RLS, dan RPC (M1)
 
-Semua task di fase ini diverifikasi lewat `psql`/Studio sebelum lanjut.
+Semua task di fase ini diverifikasi lewat `db lint` + uji HTTP ke Data API.
 
-- [ ] **T1.1: Migrasi enum dan tabel `admins` + `exams`** `P0` `S`
+> **Status 7 November 2026: T1.1–T1.11 selesai dan sudah diterapkan** ke project
+> `sikilat-cbt`. 13 berkas migrasi di `supabase/migrations/`, `db lint` bersih
+> (0 error, 0 warning), 9 tabel terpasang, dan uji akses dengan anon key
+> membuktikan `anon` tidak bisa membaca maupun menulis apa pun.
+>
+> Satu penyimpangan dari rencana awal: tidak ada Postgres lokal (Docker tidak
+> dipakai), jadi "Selesai bila: `supabase db reset` bersih" tidak bisa dijalankan.
+> Penggantinya `db lint` + `db push --dry-run` + uji HTTP, yang justru menguji
+> kondisi sebenarnya.
+
+- [x] **T1.1: Migrasi enum dan tabel `admins` + `exams`** `P0` `S`
   - Cakupan: 6 enum PRD §7.2, tabel `admins`, tabel `exams` lengkap dengan constraint (`code ~ '^[A-Z0-9]{4,10}$'`, `closes_at > opens_at`).
-  - Selesai bila: `supabase db reset` bersih.
+  - **Hasil:** `20261107000100_enum_types.sql` + `20261107000200_core_schema.sql`.
 
-- [ ] **T1.2: Migrasi `questions` + `question_options`** `P0` `S`
-  - Cakupan: sesuai PRD §7.3; tambahkan kolom dari **K1** bila disetujui.
-  - Selesai bila: `unique (exam_id, position) deferrable initially deferred` terpasang.
+- [x] **T1.2: Migrasi `questions` + `question_options`** `P0` `S`
+  - Cakupan: sesuai PRD §7.3. **K1 diputuskan: tanpa kolom mode parsial.**
+  - **Hasil:** bagian dari `20261107000200_core_schema.sql`. `unique (exam_id, position) deferrable initially deferred` terpasang.
 
-- [ ] **T1.3: Migrasi `attempts`, `attempt_answers`, `attempt_events`, `audit_logs`** `P0` `M`
+- [x] **T1.3: Migrasi `attempts`, `attempt_answers`, `attempt_events`, `audit_logs`** `P0` `M`
   - Cakupan: sesuai PRD §7.3 termasuk `total_score` generated, `unique (exam_id, participant_name_norm, attempt_no)`, partial unique index `one_active_attempt`.
-  - Selesai bila: insert dua attempt `in_progress` dengan nama sama gagal di level database.
+  - **Hasil:** bagian dari `20261107000200_core_schema.sql`. `one_active_attempt` menjadi penjaga atomik untuk penolakan `NAME_IN_USE`.
 
-- [ ] **T1.4: Indeks PRD §7.4** `P0` `S`
-  - Selesai bila: `\di` menampilkan 8 indeks tambahan.
+- [x] **T1.4: Indeks PRD §7.4** `P0` `S`
+  - **Hasil:** `20261107000300_indexes.sql` — 8 indeks PRD + 3 tambahan. Dua indeks duplikat dari percobaan pertama dihapus sebelum di-push.
 
-- [ ] **T1.5: `is_admin()` dan RLS semua tabel** `P0` `S`
-  - Cakupan: fungsi `is_admin()`, `enable row level security` di 8 tabel, policy `admin_all` / `admin_read` / `admin_self_read` persis PRD §7.5.
-  - Selesai bila: query dengan anon key mengembalikan 0 baris untuk tiap tabel.
+- [x] **T1.5: `is_admin()` dan RLS semua tabel** `P0` `S`
+  - **Hasil:** `20261107000400_rls_policies.sql`. Ditambah GRANT tingkat tabel yang tidak disebut PRD — tanpa GRANT, `authenticated` tetap tidak bisa menyentuh tabel meski punya policy.
+  - **Terverifikasi:** `anon` INSERT ke `exams` → `42501 new row violates row-level security policy`. `anon` GET semua tabel → `[]` dengan `Content-Range: */0`.
 
-- [ ] **T1.6: Revoke/grant RPC peserta** `P0` `S`
-  - Cakupan: `revoke execute ... from public, anon, authenticated` dan `grant ... to service_role` untuk 7 RPC peserta; RPC admin tetap `authenticated`.
-  - Selesai bila: memanggil RPC peserta dengan anon key → `permission denied`.
+- [x] **T1.6: Revoke/grant RPC peserta** `P0` `S`
+  - **Hasil:** bagian akhir `20261107000700_rpc_participant.sql`.
+  - **Terverifikasi:** `anon` memanggil `start_attempt`, `grade_essay`, `rate_limit_consume` → `42501 permission denied for function`.
 
-- [ ] **T1.7: RPC `start_attempt` dan `resume_attempt`** `P0` `L`
-  - Cakupan: validasi status/jadwal, hitungan attempt per nama ternormalisasi, tolak `NAME_IN_USE`, acak soal/opsi bila diaktifkan (simpan `question_order`, `option_orders`), `expires_at = least(now() + durasi, closes_at)`, hitung `max_score`; `resume_attempt` mencocokkan `resume_code`, mengganti `token_hash`, mengembalikan state.
-  - Selesai bila: uji manual 6 skenario (normal, belum dibuka, sudah ditutup, kuota habis, nama dipakai, resume benar/salah) sesuai harapan.
+- [x] **T1.7: RPC `start_attempt` dan `resume_attempt`** `P0` `L`
+  - **Hasil:** `20261107000700_rpc_participant.sql`.
+  - **Belum diuji end-to-end:** butuh kunci `sb_secret_` yang belum terpasang. Uji 6 skenario tertunda.
 
-- [ ] **T1.8: RPC `get_attempt_state`, `save_answer`, `log_attempt_event`** `P0` `L`
-  - Cakupan: `get_attempt_state` mengembalikan soal **tanpa kunci**, jawaban tersimpan, flag, `expires_at`, `server_now`; `save_answer` menolak bila lewat `expires_at` atau status bukan `in_progress`; essay dipotong/ditolak sesuai `word_max`; `log_attempt_event` dibatasi laju.
-  - Selesai bila: keluaran `get_attempt_state` tidak memuat `is_correct`, `reference_answer`, maupun `explanation` bila visibilitas `score_only`.
+- [x] **T1.8: RPC `get_attempt_state`, `save_answer`, `log_attempt_event`** `P0` `L`
+  - **Hasil:** `20261107000700_rpc_participant.sql`, diperbaiki di `20261107001100_fix_attempt_state.sql`.
+  - Bug ditemukan `db lint` dan diperbaiki: penyusunan urutan opsi memakai `array_position` pada kolom ordinal yang tidak masuk GROUP BY (SQLSTATE 42803); diganti LATERAL join.
 
-- [ ] **T1.9: RPC `submit_attempt`, `get_result`, `finalize_if_expired`** `P0` `L`
-  - Cakupan: auto-grading PG (termasuk mode parsial bila **K1** disetujui), status `graded`/`needs_grading`, idempoten, `finalize_if_expired` dipanggil lazy dari ketiga fungsi baca/tulis.
-  - Selesai bila: submit dua kali menghasilkan baris dan skor yang sama.
+- [x] **T1.9: RPC `submit_attempt`, `get_result`, `finalize_if_expired`** `P0` `L`
+  - **Hasil:** `20261107000700_rpc_participant.sql` + `20261107000500_internal_helpers.sql`.
+  - **Dua bug ditemukan `db lint` setelah terterapkan, lalu diperbaiki:**
+    1. `42703 column d.points does not exist` — fungsi penilaian akan gagal pada submit pertama. Diperbaiki di `20261107001000` lalu `20261107001300`.
+    2. Aturan "benar" ditulis dua kali (untuk total dan untuk update per baris). Dua salinan cepat atau lambat menyimpang. Sekarang dihitung sekali.
+  - **Pelajaran:** `db lint` menangkap bug yang tidak terlihat saat migrasi diterapkan, karena Postgres baru memvalidasi saat fungsi dijalankan.
 
-- [ ] **T1.10: RPC admin `grade_essay`, `reset_attempt`, `release_results`, `final_score`** `P0` `M`
-  - Cakupan: batas `0 ≤ points ≤ poin soal`; `reset_attempt` mode `delete`/`extra`; `release_results` mengisi `results_released_at`; `final_score` menerapkan `score_policy`.
-  - Selesai bila: `grade_essay` menulis `audit_logs`.
+- [x] **T1.10: RPC admin `grade_essay`, `reset_attempt`, `release_results`, `final_score`** `P0` `M`
+  - **Hasil:** `20261107000800_rpc_admin.sql`, dirapikan di `20261107001200_cleanup_warnings.sql`.
+  - **Keputusan:** `reset_attempt(mode='extra')` berperilaku sama seperti `'delete'` (menghapus attempt, beda label audit). Menambah jatah lewat `max_attempts` akan berlaku untuk semua peserta; kolom jatah personal ditolak pemilik project.
 
-- [ ] **T1.11: `expire_overdue_attempts()` + jadwal** `P1` `S`
-  - Cakupan: fungsi submit otomatis attempt lewat `expires_at`; `pg_cron` tiap menit (atau dokumentasikan Edge Function).
-  - Selesai bila: attempt dengan `expires_at` di masa lalu berubah status setelah fungsi dipanggil manual.
+- [x] **T1.11: `expire_overdue_attempts()` + jadwal** `P1` `S`
+  - **Hasil:** `20261107000900_cron.sql`. Sekaligus membersihkan `rate_limits` lama, jadi tidak perlu cron kedua.
+  - **Kegagalan pertama:** `unrecognized exception condition "undefined_schema"` — nama kondisi itu tidak ada di PL/pgSQL (yang sah `invalid_schema_name`). Diganti penanganan SQLSTATE eksplisit.
 
 - [ ] **T1.12: `supabase/seed.sql`** `P0` `S`
   - Cakupan: satu admin aktif + satu ujian contoh (10 soal PG + 2 esai) agar pengembangan tidak butuh data palsu.
-  - Selesai bila: `supabase db reset` menghasilkan data yang bisa dipakai login.
+  - Catatan: tanpa Postgres lokal, seed **tidak** dijalankan lewat `db reset`, melainkan `supabase db push --include-seed` atau SQL manual di Studio. Akun admin dibuat lewat dashboard **Authentication → Add user** lebih dulu; `seed.sql` hanya mengisi baris `admins` dengan `user_id` yang sesuai.
+  - Selesai bila: admin bisa login, dan ujian contoh tampil di dashboard dengan 12 soal.
+
+- [x] **T1.13: Rate limit tabel Postgres** `P0` `S`
+  - Cakupan (keputusan **K2**): tabel `rate_limits` + `rate_limit_consume(bucket, identifier, limit, window_secs)` atomik + `rate_limit_purge()`.
+  - **Hasil:** `20261107000200_core_schema.sql` (tabel) + `20261107000600_rate_limit.sql` (fungsi).
+  - Kenapa atomik: kalau baca dan tulis terpisah, 20 permintaan paralel semuanya membaca counter = 0 lalu semuanya lolos. `insert ... on conflict do update` menyatukannya jadi satu pernyataan.
+  - **Terverifikasi:** `anon` tidak bisa memanggil `rate_limit_consume` (`42501`).
+
+- [x] **T1.14: Verifikasi RLS dan hak eksekusi** `P0` `S`
+  - Cakupan: membuktikan (bukan mengasumsikan) bahwa `anon` tidak bisa membaca, menulis, atau memanggil RPC apa pun.
+  - **Hasil uji 7 November 2026:**
+
+    | Uji | Hasil |
+    |---|---|
+    | `anon` GET `exams`, `questions`, `attempts`, `rate_limits` | `[]`, `Content-Range: */0` |
+    | `anon` POST `exams` | `42501 new row violates row-level security policy` |
+    | `anon` POST ke 9 tabel | semua `42501` |
+    | `anon` RPC `start_attempt` | `42501 permission denied for function` |
+    | `anon` RPC `grade_essay` | `42501 permission denied for function` |
+    | `anon` RPC `rate_limit_consume` | `42501 permission denied for function` |
+
+  - **Catatan penting:** tabel kosong mengembalikan `[]` baik dengan maupun tanpa RLS, jadi uji baca-saja **tidak membuktikan apa pun**. Yang membuktikan adalah uji tulis (`42501`) dan `Content-Range: */0`.
+  - **Belum diuji:** akses sebagai admin (`authenticated`) — butuh akun admin + kunci `sb_secret_`.
 
 ---
 
