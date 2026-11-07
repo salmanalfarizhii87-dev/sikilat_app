@@ -23,6 +23,16 @@ const eslintConfig = defineConfig([
      */
     "src/app/(landing)/**",
   ]),
+  {
+    /*
+     * Skrip utilitas di `scripts/` dijalankan langsung dengan `node`, bukan
+     * lewat bundler Next.js, jadi formatnya CommonJS dan `require()` sah.
+     */
+    files: ["scripts/**/*.cjs"],
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
+    },
+  },
 ]);
 
 export default eslintConfig;
