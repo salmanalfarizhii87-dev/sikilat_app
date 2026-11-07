@@ -1,6 +1,6 @@
 # KilatCBT: Daftar Task Eksekusi (Turunan PRD v2.0)
 
-Sumber tunggal: `PRD-KilatCBT.md` (v2.0, 5 November 2026).
+Sumber tunggal: [`PRD-KilatCBT.md`](./PRD-KilatCBT.md) (v2.0, 5 November 2026).
 Status dokumen: rencana kerja, bukan spesifikasi baru. Bila ada konflik, PRD menang.
 Tujuan: setiap task cukup kecil untuk diselesaikan dalam satu sesi kerja, punya batas file yang jelas, dan punya definisi selesai yang bisa diperiksa.
 

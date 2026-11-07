@@ -2,7 +2,7 @@
 
 Landing page **KilatCBT** yang dibangun ulang mengikuti desain landing page
 **pintarly.id** (layout, tipografi, warna, dan perilaku scroll), dengan isi/fitur
-sesuai `PRD-KilatCBT.md`. Logo memakai aset asli; ilustrasi lain masih blok
+sesuai [`../docs/PRD-KilatCBT.md`](../docs/PRD-KilatCBT.md). Logo memakai aset asli; ilustrasi lain masih blok
 placeholder polos.
 
 ## Yang perlu dipindah ke project utama
